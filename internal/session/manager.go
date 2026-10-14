@@ -68,14 +68,22 @@ func NewManager(ttl time.Duration) *Manager {
 	return &Manager{byID: map[string]*Session{}, ttl: ttl, now: time.Now}
 }
 
-// Start creates a fresh session and returns it.
+// Start creates a fresh session and returns it. It first sweeps expired
+// entries, so abandoned sessions (whose tokens are never presented again)
+// are reclaimed and memory stays bounded by one TTL window of traffic.
 func (m *Manager) Start() *Session {
+	now := m.now()
+	m.mu.Lock()
+	for k, s := range m.byID {
+		if now.After(s.ExpiresAt) {
+			delete(m.byID, k)
+		}
+	}
 	s := &Session{
 		DiscordState: newToken(),
-		CreatedAt:    m.now(),
+		CreatedAt:    now,
 	}
 	s.ExpiresAt = s.CreatedAt.Add(m.ttl)
-	m.mu.Lock()
 	m.byID[s.DiscordState] = s
 	m.mu.Unlock()
 	return s

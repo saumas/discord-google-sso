@@ -54,7 +54,10 @@ adminRoleIDs: []
 adminUserIDs: []
 
 # Name of the app-owned state Secret. Created by the application; never
-# templated or owned by this chart.
+# templated or owned by this chart. IMMUTABLE after first install: changing
+# it abandons the existing Secret (all identity links, epochs, and pending
+# operations) and starts from empty state — treat it as permanent, or
+# restore by copying the old Secret to the new name before use.
 stateSecretName: discord-google-sso-state
 
 reconcileInterval: 5m

@@ -89,7 +89,7 @@ func Revoke(args []string) int {
 		return 1
 	}
 
-	res, err := core.RevokeCommitOnly(ctx, store, guild, memberID, nil)
+	res, err := core.RevokeCommitOnly(ctx, store, guild, memberID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
 		return 1

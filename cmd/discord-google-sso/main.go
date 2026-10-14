@@ -1,7 +1,8 @@
 // Command discord-google-sso runs the self-hosted Discord ↔ Google Workspace
-// SSO verification service. The default (no arguments) is the server; the
-// binary also carries the operator CLI (`revoke`) and the E2E provider
-// simulators (`sim-discord`, `sim-google`) used by the Kind test suite.
+// SSO verification service. Subcommands: `serve` (or no arguments) runs the
+// HTTP server, `revoke` is the operator CLI, and `sim-discord`/`sim-google`
+// are the E2E provider simulators used by the Kind test suite. Any other
+// first argument is a configuration error and exits with usage.
 package main
 
 import (
@@ -26,18 +27,33 @@ import (
 	"github.com/saumas/discord-google-sso/internal/state"
 )
 
+const usage = `usage: discord-google-sso <command> [args]
+
+commands:
+  serve                run the verification HTTP server (default when no
+                       arguments are given)
+  revoke <member-id>   operator CLI: commit a revocation
+        --state-secret <name> --guild <id> [--namespace <ns>]
+  sim-discord          run the Discord provider simulator (E2E only)
+  sim-google           run the Google OIDC provider simulator (E2E only)`
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "serve":
+			runServer()
 		case "revoke":
 			os.Exit(cli.Revoke(os.Args[2:]))
 		case "sim-discord":
 			sim.RunDiscord(os.Args[2:])
-			return
 		case "sim-google":
 			sim.RunGoogle(os.Args[2:])
-			return
+		default:
+			fmt.Fprintln(os.Stderr, "unknown command:", os.Args[1])
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(2)
 		}
+		return
 	}
 	runServer()
 }
@@ -57,7 +73,9 @@ func runServer() {
 		log.Error("kubernetes client", "error", err.Error())
 		os.Exit(1)
 	}
-	if cfg.Namespace == "" || cfg.Namespace == "default" {
+	// Only fill in the namespace when none was configured: an explicit
+	// DGS_NAMESPACE value (including an explicit "default") always wins.
+	if cfg.Namespace == "" {
 		cfg.Namespace = ns
 	}
 
@@ -100,12 +118,11 @@ func runServer() {
 	}()
 
 	// Reconciler: startup pass plus interval ticker.
-	rec := reconciler.New(svc, cfg.ReconcileInterval, log)
+	rec := reconciler.New(svc, cfg.ReconcileInterval)
 	go rec.Run(ctx)
 
 	if err := httpServer.ListenAndServe(ctx); err != nil {
 		log.Error("http server", "error", err.Error())
 		os.Exit(1)
 	}
-	_ = fmt.Sprint()
 }

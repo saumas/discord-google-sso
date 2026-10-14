@@ -48,9 +48,9 @@ func TestClientMemberLookup(t *testing.T) {
 	joined := "2026-10-01T12:00:00.936000+00:00"
 	srv := startTestServer(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == "GET" && r.URL.Path == "/api/guilds/g/members/known":
+		case r.Method == "GET" && r.URL.Path == "/api/v10/guilds/g/members/known":
 			_, _ = w.Write([]byte(`{"user":{"id":"known"},"joined_at":"` + joined + `","roles":["1"]}`))
-		case r.Method == "GET" && r.URL.Path == "/api/guilds/g/members/gone":
+		case r.Method == "GET" && r.URL.Path == "/api/v10/guilds/g/members/gone":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"message":"Unknown Member","code":10007}`))
 		default:

@@ -76,7 +76,7 @@ func (c *Client) Discovery(ctx context.Context) (*DiscoveryDoc, error) {
 		return c.discovery, nil
 	}
 	var d DiscoveryDoc
-	if err := c.getJSON(ctx, c.baseURL+"/.well-known/openid-configuration", &d, noLogBody); err != nil {
+	if err := c.getJSON(ctx, c.baseURL+"/.well-known/openid-configuration", &d); err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
 	if d.Issuer == "" || d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" || d.JWKSURI == "" {
@@ -157,21 +157,9 @@ type jwk struct {
 }
 
 func (c *Client) fetchJWKS(ctx context.Context, d *DiscoveryDoc) (map[string]crypto.PublicKey, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", d.JWKSURI, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("jwks fetch: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jwks fetch: status %d", resp.StatusCode)
-	}
 	var doc jwksDoc
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
-		return nil, fmt.Errorf("jwks parse: %w", err)
+	if err := c.getJSON(ctx, d.JWKSURI, &doc); err != nil {
+		return nil, fmt.Errorf("jwks fetch: %w", err)
 	}
 	keys := map[string]crypto.PublicKey{}
 	for _, k := range doc.Keys {
@@ -303,14 +291,7 @@ func (c *Client) key(ctx context.Context, d *DiscoveryDoc, kid string) (crypto.P
 	return nil, fmt.Errorf("id token: unknown key id %q", kid)
 }
 
-type bodyPolicy int
-
-const (
-	logBody bodyPolicy = iota
-	noLogBody
-)
-
-func (c *Client) getJSON(ctx context.Context, url string, out any, _ bodyPolicy) error {
+func (c *Client) getJSON(ctx context.Context, url string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err

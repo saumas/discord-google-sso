@@ -128,20 +128,11 @@ func Load() (*Config, error) {
 	if c.ClockLeeway, err = envDur("CLOCK_LEEWAY", 30*time.Second); err != nil {
 		return nil, err
 	}
-	if c.Namespace == "" {
-		c.Namespace = defaultNamespace()
-	}
+	// Namespace stays empty when unset: the single "unset" sentinel. The
+	// server fills it from the Kubernetes client's namespace resolution
+	// (in-cluster service account, else kubeconfig context) only when empty;
+	// an explicitly configured value always wins.
 	return c, c.Validate()
-}
-
-func defaultNamespace() string {
-	b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
-	if err == nil {
-		if ns := strings.TrimSpace(string(b)); ns != "" {
-			return ns
-		}
-	}
-	return "default"
 }
 
 // Validate enforces required fields, formats, and the role-policy

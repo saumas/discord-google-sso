@@ -528,6 +528,7 @@ func scRepeatedRevocation(e *env) error {
 		doc, _ := e.readState()
 		return doc.Epochs[userMain]
 	}()
+	baseline := len(e.followups()) // cumulative record; require a NEW entry
 	e.discAdmin("POST", "/_admin/fail", map[string]any{"path": "/roles/", "status": 500, "count": 0})
 	for range 2 {
 		status, respBody, err := e.postInteraction(revokeCommand(userMain, userAdmin, []string{roleAdmin}))
@@ -557,9 +558,13 @@ func scRepeatedRevocation(e *env) error {
 	}); err != nil {
 		return err
 	}
-	// Honest done-vs-pending reporting: the follow-up said so.
-	if _, ok := e.waitFollowup(1, ""); !ok {
-		return fmt.Errorf("no follow-up delivered")
+	// Honest done-vs-pending reporting: with role work failing, the
+	// follow-up must say restoration is still pending — never claim early
+	// completion — and it must be a new follow-up beyond the baseline.
+	if fu, ok := e.waitFollowup(baseline+1, "still pending"); !ok {
+		return fmt.Errorf("honest pending report not delivered (followups: %v)", e.followups())
+	} else if strings.Contains(fu, "Revocation complete") {
+		return fmt.Errorf("follow-up claimed completion while restoration pending: %s", fu)
 	}
 	return expectBody(verifyUser(e, userMain, gIDWorkspace), "Verification complete")
 }
@@ -652,6 +657,18 @@ func scHelmLifecycle(e *env) error {
 	}
 	if !e.hasRole(userMain, roleVerified1) {
 		return fmt.Errorf("helm upgrade lost roles")
+	}
+	// Compatible rollback preserves the state Secret too (spec: upgrade,
+	// compatible rollback, and uninstall/reinstall all preserve it).
+	e.helm("rollback", release, "1", "--namespace", ns, "--wait", "--timeout", "180s")
+	if err := e.waitReady(); err != nil {
+		return err
+	}
+	if m := e.stateMember(userMain); m == nil || m.GoogleSub != gIDWorkspace.Sub {
+		return fmt.Errorf("helm rollback lost the link")
+	}
+	if !e.hasRole(userMain, roleVerified1) {
+		return fmt.Errorf("helm rollback lost roles")
 	}
 	// Uninstall + reinstall in the retained namespace.
 	e.helm("uninstall", release, "--namespace", ns)

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,6 +27,9 @@ type Server struct {
 	srv     *httptest.Server
 	// Writes counts mutating requests served.
 	Writes int
+	// HideNextGet, when set, makes the next GET return 404 once (simulating
+	// a create race where the Secret appears between a miss and a Create).
+	HideNextGet atomic.Bool
 }
 
 // New starts a fake API server.
@@ -75,6 +79,10 @@ func statusErr(w http.ResponseWriter, code int, reason metav1.StatusReason, mess
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
+	if s.HideNextGet.CompareAndSwap(true, false) {
+		statusErr(w, http.StatusNotFound, metav1.StatusReasonNotFound, "simulated create race")
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := r.PathValue("ns") + "/" + r.PathValue("name")

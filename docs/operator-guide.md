@@ -79,7 +79,13 @@ As the maintainer you additionally own the human parts of onboarding
    ```
 
 2. Install the chart with your values (see `charts/discord-google-sso/values.yaml`
-   for the full list):
+   for the full list). Note that `stateSecretName` is **immutable after
+   first install**: changing it on a later `helm upgrade` repoints the RBAC
+   and the application to a new, empty Secret and silently abandons the
+   old one — every verified member, their revocation epochs, and any pending
+   operations are left behind (the old Secret remains in the namespace, so
+   you can recover by copying it to the new name, then restarting the
+   Deployment). Treat the value as permanent.
 
    ```yaml
    guildID: "<your-guild-id>"
@@ -123,7 +129,11 @@ minutes.
 ## 6. State backup and restore
 
 The state document is a versioned, gzipped JSON payload stored under the
-`state.json.gz` key of the app-owned Secret `<stateSecretName>`.
+`state.json.gz` key of the app-owned Secret `<stateSecretName>`. **It
+contains members' personal data** — every linked member's Google name and
+email — so treat backups with the same care as any personal-data store:
+restrict access, store them encrypted (e.g. in a secrets manager), and
+delete local copies after a restore has been verified.
 
 Backup:
 
@@ -137,8 +147,9 @@ Restore (e.g. into a fresh cluster):
 kubectl -n discord-sso apply -f state-backup.yaml
 ```
 
-Because the chart neither creates nor owns this Secret, `helm uninstall` +
-reinstall in the retained namespace preserves it; restore is only needed
+Because the chart neither creates nor owns this Secret, `helm upgrade`,
+`helm rollback` to a compatible revision, and `helm uninstall` +
+reinstall in the retained namespace all preserve it; restore is only needed
 when the namespace or cluster itself is gone. The loader refuses corrupt
 data, unknown schema versions, and Secrets belonging to a different guild
 rather than resetting anything — if you see such an error, fix or restore the

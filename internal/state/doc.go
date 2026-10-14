@@ -87,6 +87,12 @@ func (d *Doc) Validate(guildID string) error {
 	if d.Members == nil {
 		return fmt.Errorf("state document has no members map")
 	}
+	if d.Epochs == nil {
+		return fmt.Errorf("state document has no epochs map")
+	}
+	if d.Pending == nil {
+		return fmt.Errorf("state document has no pending map")
+	}
 	seenSub := map[string]string{}
 	for memberID, m := range d.Members {
 		if memberID == "" || m == nil || m.GoogleSub == "" {
@@ -158,6 +164,23 @@ func (d *Doc) ApplyRevokeCommit(memberID, opID string, now time.Time) bool {
 		delete(d.Pending, memberID)
 		return false
 	}
+}
+
+// ApplyDepartureRelease releases a member's link and pending operations and
+// bumps their revocation epoch — the departure terminal state. The release
+// only happens when the stored link still carries the given membership
+// attestation (joined_at): a link that has since been refreshed by a
+// re-verification belongs to a newer, valid flow and must not be released by
+// a stale departure observation.
+func (d *Doc) ApplyDepartureRelease(memberID string, attestedJoinedAt time.Time) bool {
+	cur := d.Members[memberID]
+	if cur == nil || !cur.JoinedAt.Equal(attestedJoinedAt) {
+		return false
+	}
+	delete(d.Members, memberID)
+	d.Epochs[memberID]++
+	delete(d.Pending, memberID)
+	return true
 }
 
 // UnionStrings returns the ordered union of the given slices.

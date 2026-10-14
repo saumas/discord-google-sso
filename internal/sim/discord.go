@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ type Failure struct {
 	Status  int    `json:"status"`
 	Count   int    `json:"count"` // 0 = unlimited
 	DelayMS int    `json:"delay_ms"`
+	Body    string `json:"body"` // response body written for the failure
 }
 
 // ConsentTmpl renders the shared consent page for both simulators.
@@ -81,9 +83,9 @@ func (f *failureEngine) clear() {
 	f.failures = nil
 }
 
-// check reports (blocked, status). A blocked request should return the given
-// status after the configured delay.
-func (f *failureEngine) check(method, path string) (bool, int, time.Duration) {
+// check reports (blocked, status, delay, body). A blocked request should
+// return the given status and body after the configured delay.
+func (f *failureEngine) check(method, path string) (bool, int, time.Duration, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.failures {
@@ -92,10 +94,28 @@ func (f *failureEngine) check(method, path string) (bool, int, time.Duration) {
 			if fa.Count > 0 {
 				fa.Count--
 			}
-			return true, fa.Status, time.Duration(fa.DelayMS) * time.Millisecond
+			return true, fa.Status, time.Duration(fa.DelayMS) * time.Millisecond, fa.Body
 		}
 	}
-	return false, 0, 0
+	return false, 0, 0, ""
+}
+
+// gate applies injected failures for the request and reports whether the
+// request was blocked (the failure response — status and any configured
+// marker body — has already been written).
+func (f *failureEngine) gate(w http.ResponseWriter, r *http.Request) bool {
+	blocked, status, delay, body := f.check(r.Method, r.URL.Path)
+	if !blocked {
+		return false
+	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	w.WriteHeader(status)
+	if body != "" {
+		_, _ = io.WriteString(w, body)
+	}
+	return true
 }
 
 func contains(s, sub string) bool {
@@ -156,18 +176,19 @@ func (d *DiscordSim) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth2/authorize", d.handleAuthorize)
 	mux.HandleFunc("POST /oauth2/authorize/decision", d.handleAuthorizeDecision)
-	mux.HandleFunc("POST /api/oauth2/token", d.handleToken)
-	mux.HandleFunc("GET /api/users/@me", d.handleMe)
-	mux.HandleFunc("GET /api/guilds/{gid}/members/{uid}", d.handleGetMember)
-	mux.HandleFunc("PUT /api/guilds/{gid}/members/{uid}/roles/{rid}", d.handleRole(true))
-	mux.HandleFunc("DELETE /api/guilds/{gid}/members/{uid}/roles/{rid}", d.handleRole(false))
-	mux.HandleFunc("GET /api/applications/{aid}/guilds/{gid}/commands", d.handleGetCommands)
-	mux.HandleFunc("PUT /api/applications/{aid}/guilds/{gid}/commands", d.handlePutCommands)
-	mux.HandleFunc("PATCH /api/webhooks/{aid}/{token}/messages/@original", d.handleFollowup)
+	mux.HandleFunc("POST /api/v10/oauth2/token", d.handleToken)
+	mux.HandleFunc("GET /api/v10/users/@me", d.handleMe)
+	mux.HandleFunc("GET /api/v10/guilds/{gid}/members/{uid}", d.handleGetMember)
+	mux.HandleFunc("PUT /api/v10/guilds/{gid}/members/{uid}/roles/{rid}", d.handleRole(true))
+	mux.HandleFunc("DELETE /api/v10/guilds/{gid}/members/{uid}/roles/{rid}", d.handleRole(false))
+	mux.HandleFunc("GET /api/v10/applications/{aid}/guilds/{gid}/commands", d.handleGetCommands)
+	mux.HandleFunc("PUT /api/v10/applications/{aid}/guilds/{gid}/commands", d.handlePutCommands)
+	mux.HandleFunc("PATCH /api/v10/webhooks/{aid}/{token}/messages/@original", d.handleFollowup)
 	mux.HandleFunc("POST /_admin/reset", d.adminReset)
 	mux.HandleFunc("POST /_admin/login-as", d.adminLoginAs)
 	mux.HandleFunc("POST /_admin/member", d.adminMember)
 	mux.HandleFunc("POST /_admin/kick", d.adminKick)
+	mux.HandleFunc("POST /_admin/member-no-joined-at", d.adminMemberNoJoinedAt)
 	mux.HandleFunc("POST /_admin/set-roles", d.adminSetRoles)
 	mux.HandleFunc("POST /_admin/fail", d.adminFail)
 	mux.HandleFunc("POST /_admin/clear-failures", func(w http.ResponseWriter, _ *http.Request) {
@@ -179,11 +200,7 @@ func (d *DiscordSim) Handler() http.Handler {
 }
 
 func (d *DiscordSim) handleAuthorize(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		w.WriteHeader(status)
+	if d.failures.gate(w, r) {
 		return
 	}
 	q := r.URL.Query()
@@ -228,11 +245,7 @@ func (d *DiscordSim) handleAuthorizeDecision(w http.ResponseWriter, r *http.Requ
 }
 
 func (d *DiscordSim) handleToken(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		w.WriteHeader(status)
+	if d.failures.gate(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -262,11 +275,7 @@ func (d *DiscordSim) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *DiscordSim) handleMe(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		w.WriteHeader(status)
+	if d.failures.gate(w, r) {
 		return
 	}
 	d.mu.Lock()
@@ -292,11 +301,7 @@ func (d *DiscordSim) guildMember(guildID, userID string) *simMember {
 }
 
 func (d *DiscordSim) handleGetMember(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		w.WriteHeader(status)
+	if d.failures.gate(w, r) {
 		return
 	}
 	if r.Header.Get("Authorization") != "Bot "+d.BotToken {
@@ -320,11 +325,7 @@ func (d *DiscordSim) handleGetMember(w http.ResponseWriter, r *http.Request) {
 
 func (d *DiscordSim) handleRole(add bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
-			if delay > 0 {
-				time.Sleep(delay)
-			}
-			w.WriteHeader(status)
+		if d.failures.gate(w, r) {
 			return
 		}
 		if r.Header.Get("Authorization") != "Bot "+d.BotToken {
@@ -475,6 +476,27 @@ func (d *DiscordSim) adminKick(w http.ResponseWriter, r *http.Request) {
 	if g := d.members[req.GuildID]; g != nil {
 		delete(g, req.UserID)
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminMemberNoJoinedAt installs a member whose lookup returns no usable
+// joined_at (the caller fails safely; used to test the anchor invariant).
+func (d *DiscordSim) adminMemberNoJoinedAt(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID  string   `json:"user_id"`
+		GuildID string   `json:"guild_id"`
+		Roles   []string `json:"roles"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.members[req.GuildID] == nil {
+		d.members[req.GuildID] = map[string]*simMember{}
+	}
+	d.members[req.GuildID][req.UserID] = &simMember{Roles: req.Roles}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -97,7 +97,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string) (string, error) 
 		"redirect_uri":  {c.callbackURL},
 	}
 	// Response bodies are never logged for token endpoints.
-	status, body, err := c.request(ctx, "POST", "/api/oauth2/token", "oauth-exchange", "", "application/x-www-form-urlencoded", []byte(form.Encode()), noLogBody)
+	status, body, err := c.request(ctx, "POST", "/api/v10/oauth2/token", "oauth-exchange", "", "application/x-www-form-urlencoded", []byte(form.Encode()), noLogBody)
 	if err != nil {
 		return "", err
 	}
@@ -117,7 +117,7 @@ type userResp struct {
 
 // GetCurrentUser returns the user ID behind an OAuth access token.
 func (c *Client) GetCurrentUser(ctx context.Context, accessToken string) (string, error) {
-	status, body, err := c.request(ctx, "GET", "/api/users/@me", "identify", "Bearer "+accessToken, "", nil, noLogBody)
+	status, body, err := c.request(ctx, "GET", "/api/v10/users/@me", "identify", "Bearer "+accessToken, "", nil, noLogBody)
 	if err != nil {
 		return "", err
 	}
@@ -144,7 +144,7 @@ type memberResp struct {
 
 // GetMember looks up a guild member and their joined_at timestamp.
 func (c *Client) GetMember(ctx context.Context, guildID, userID string) (MemberInfo, error) {
-	status, body, err := c.request(ctx, "GET", "/api/guilds/"+guildID+"/members/"+userID, "member-get", "Bot "+c.botToken, "", nil, logBody)
+	status, body, err := c.request(ctx, "GET", "/api/v10/guilds/"+guildID+"/members/"+userID, "member-get", "Bot "+c.botToken, "", nil, logBody)
 	if err != nil {
 		return MemberInfo{}, err
 	}
@@ -172,12 +172,12 @@ func (c *Client) GetMember(ctx context.Context, guildID, userID string) (MemberI
 
 // AddRole adds a role to a guild member.
 func (c *Client) AddRole(ctx context.Context, guildID, userID, roleID string) error {
-	return c.statusCall(ctx, "PUT", "/api/guilds/"+guildID+"/members/"+userID+"/roles/"+roleID, "role-add", "role add")
+	return c.statusCall(ctx, "PUT", "/api/v10/guilds/"+guildID+"/members/"+userID+"/roles/"+roleID, "role-add", "role add")
 }
 
 // RemoveRole removes a role from a guild member.
 func (c *Client) RemoveRole(ctx context.Context, guildID, userID, roleID string) error {
-	return c.statusCall(ctx, "DELETE", "/api/guilds/"+guildID+"/members/"+userID+"/roles/"+roleID, "role-remove", "role remove")
+	return c.statusCall(ctx, "DELETE", "/api/v10/guilds/"+guildID+"/members/"+userID+"/roles/"+roleID, "role-remove", "role remove")
 }
 
 func (c *Client) statusCall(ctx context.Context, method, path, op, desc string) error {
@@ -228,7 +228,7 @@ func (c *Client) RegisterRevokeCommand(ctx context.Context, guildID string) erro
 	if err != nil {
 		return err
 	}
-	status, respBody, err := c.request(ctx, "PUT", "/api/applications/"+c.clientID+"/guilds/"+guildID+"/commands", "command-register", "Bot "+c.botToken, "application/json", body, logBody)
+	status, respBody, err := c.request(ctx, "PUT", "/api/v10/applications/"+c.clientID+"/guilds/"+guildID+"/commands", "command-register", "Bot "+c.botToken, "application/json", body, logBody)
 	if err != nil {
 		return err
 	}
@@ -246,7 +246,7 @@ func (c *Client) PatchInteractionResponse(ctx context.Context, applicationID, in
 	if err != nil {
 		return err
 	}
-	path := "/api/webhooks/" + applicationID + "/" + interactionToken + "/messages/@original"
+	path := "/api/v10/webhooks/" + applicationID + "/" + interactionToken + "/messages/@original"
 	status, respBody, err := c.request(ctx, http.MethodPatch, path, "interaction-followup", "", "application/json", body, logBody)
 	if err != nil {
 		return err
@@ -271,6 +271,16 @@ func bodySnippet(b []byte) string {
 		s = s[:maxBodyLog]
 	}
 	return s
+}
+
+// snippetFor returns the response-body snippet an APIError may carry. For
+// token/identify endpoints (noLogBody) the body is never surfaced — errors
+// from those endpoints flow into logs and must not carry response material.
+func (c *Client) snippetFor(policy bodyLogPolicy, b []byte) string {
+	if policy == noLogBody {
+		return "response body suppressed"
+	}
+	return bodySnippet(b)
 }
 
 // request performs an HTTP call with rate-limit honoring and bounded retry.
@@ -303,7 +313,7 @@ func (c *Client) request(ctx context.Context, method, path, op, auth, contentTyp
 				}
 				continue
 			}
-			lastErr = &APIError{Op: op, Status: status, Body: bodySnippet(respBody), Permanent: false}
+			lastErr = &APIError{Op: op, Status: status, Body: c.snippetFor(bodyPolicy, respBody), Permanent: false}
 			c.log.Warn("discord request failed", "op", op, "attempt", attempt+1, "status", status)
 			continue
 		}

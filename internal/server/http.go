@@ -6,7 +6,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -59,7 +61,14 @@ func New(cfg *config.Config, svc *core.Service, d *discordapi.Client, g *googleo
 		}
 		http.NotFound(w, r)
 	})
-	s.http = &http.Server{Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	s.http = &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	return s
 }
 
@@ -154,11 +163,13 @@ func (s *Server) handleDiscordCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info.NotFound {
+		s.log.Info("verification rejected", "member", memberID, "reason", "not-a-member")
 		s.reject(w, "You are not currently a member of this server, so verification cannot continue.")
 		return
 	}
 	if info.JoinedAt.IsZero() {
 		// A link is never stored without its reconciliation anchor.
+		s.log.Warn("membership anchor unavailable", "member", memberID)
 		s.render(w, http.StatusBadGateway, "Temporary error", "Your membership information is temporarily unavailable. Please try the verification link again.", true)
 		return
 	}
@@ -206,26 +217,20 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := s.google.ValidateIDToken(r.Context(), idToken, sess.Nonce)
 	if err != nil {
-		s.log.Warn("google id token validation failed", "error", err.Error())
+		s.log.Warn("google id token validation failed", "member", sess.MemberID, "error", err.Error())
 		s.reject(w, "Your Google identity could not be verified. Please make sure you sign in with your organization account and try again.")
-		return
-	}
-	if !claims.EmailVerified {
-		s.reject(w, "The Google account's email address is not verified.")
-		return
-	}
-	if !s.domainAllowed(claims.Hd) {
-		s.reject(w, "This server only accepts members with an approved organization Google account.")
 		return
 	}
 
 	res := s.core.Verify(r.Context(), &core.VerifyInput{
-		MemberID:    sess.MemberID,
-		Epoch:       sess.Epoch,
-		JoinedAt:    sess.JoinedAt,
-		GoogleSub:   claims.Sub,
-		GoogleName:  claims.Name,
-		GoogleEmail: claims.Email,
+		MemberID:      sess.MemberID,
+		Epoch:         sess.Epoch,
+		JoinedAt:      sess.JoinedAt,
+		GoogleSub:     claims.Sub,
+		Hd:            claims.Hd,
+		EmailVerified: claims.EmailVerified,
+		GoogleName:    claims.Name,
+		GoogleEmail:   claims.Email,
 	})
 	switch res.Status {
 	case core.VerifyVerified:
@@ -235,18 +240,6 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.render(w, http.StatusAccepted, "Verification in progress", res.Reason, true)
 	}
-}
-
-func (s *Server) domainAllowed(hd string) bool {
-	if hd == "" {
-		return false
-	}
-	for _, d := range s.cfg.Google.AllowedDomains {
-		if hd == d {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Discord interactions ---
@@ -282,14 +275,10 @@ const (
 )
 
 func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
-	body := make([]byte, 0, 4096)
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Body.Read(buf)
-		body = append(body, buf[:n]...)
-		if err != nil || len(body) > 1<<20 {
-			break
-		}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 	if err := discordapi.VerifyInteractionRequest(
 		s.cfg.Discord.PublicKey,
@@ -320,7 +309,7 @@ func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorizeAdmin(&it); !ok {
+	if !s.authorizeAdmin(&it) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"type": itRespMessage,
 			"data": map[string]any{"content": "You are not authorized to use this command.", "flags": 64},
@@ -355,7 +344,11 @@ func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 			msg = "Revocation failed: could not commit the state change."
 			s.log.Error("revoke command commit failed", "target", target, "caller", caller, "error", err.Error())
 		case err != nil:
-			msg = "Revocation committed; role restoration is still pending and will be applied automatically."
+			if errors.Is(err, core.ErrSuperseded) {
+				msg = "Revocation superseded by a newer verification; the member's current state reflects the newest operation."
+			} else {
+				msg = "Revocation committed; role restoration is still pending and will be applied automatically."
+			}
 			s.log.Warn("revoke command role restoration pending", "target", target, "caller", caller, "error", err.Error())
 		case !res.CreatedRestoreOp:
 			msg = "No verified link found for that member; any pending login sessions were invalidated."
@@ -370,17 +363,17 @@ func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (s *Server) authorizeAdmin(it *interaction) (string, bool) {
+func (s *Server) authorizeAdmin(it *interaction) bool {
 	if it.Member != nil {
 		for _, id := range s.cfg.AdminUserIDs {
 			if it.Member.User.ID == id {
-				return it.Member.User.ID, true
+				return true
 			}
 		}
 		for _, role := range it.Member.Roles {
 			for _, adminRole := range s.cfg.AdminRoleIDs {
 				if role == adminRole {
-					return it.Member.User.ID, true
+					return true
 				}
 			}
 		}
@@ -388,11 +381,11 @@ func (s *Server) authorizeAdmin(it *interaction) (string, bool) {
 	if it.User != nil {
 		for _, id := range s.cfg.AdminUserIDs {
 			if it.User.ID == id {
-				return it.User.ID, true
+				return true
 			}
 		}
 	}
-	return "", false
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

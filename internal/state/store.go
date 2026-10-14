@@ -66,26 +66,37 @@ func (s *Store) Name() string { return s.name }
 
 // Load reads the state Secret, creating it if missing. It refuses corrupt
 // data, unknown schema versions, and foreign guild IDs instead of resetting.
+// After creating, it re-reads the Secret: another writer may have created it
+// first in the race window, and the returned document must reflect persisted
+// state rather than a locally built one.
 func (s *Store) Load(ctx context.Context, guildID string) (*Doc, error) {
+	decode := func(sec *corev1.Secret) (*Doc, error) {
+		doc, err := decodeDoc(sec)
+		if err != nil {
+			return nil, err
+		}
+		if err := doc.Validate(guildID); err != nil {
+			return nil, fmt.Errorf("state secret %s/%s: %w", s.namespace, s.name, err)
+		}
+		return doc, nil
+	}
 	sec, err := s.client.CoreV1().Secrets(s.namespace).Get(ctx, s.name, metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("get state secret: %w", err)
 		}
-		doc := NewDoc(guildID)
-		if err := s.create(ctx, doc); err != nil {
+		if err := s.create(ctx, NewDoc(guildID)); err != nil {
 			return nil, err
 		}
-		return doc, nil
+		// Re-read: our Create may have lost the race to another writer, in
+		// which case the persisted document is authoritative.
+		sec, err = s.client.CoreV1().Secrets(s.namespace).Get(ctx, s.name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("get state secret after create: %w", err)
+		}
+		return decode(sec)
 	}
-	doc, err := decodeDoc(sec)
-	if err != nil {
-		return nil, err
-	}
-	if err := doc.Validate(guildID); err != nil {
-		return nil, fmt.Errorf("state secret %s/%s: %w", s.namespace, s.name, err)
-	}
-	return doc, nil
+	return decode(sec)
 }
 
 func decodeDoc(sec *corev1.Secret) (*Doc, error) {

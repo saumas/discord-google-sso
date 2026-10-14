@@ -16,22 +16,24 @@ import (
 
 // fakeDiscord is an in-memory RoleAPI with scriptable failures.
 type fakeDiscord struct {
-	mu       sync.Mutex
-	members  map[string]discordapi.MemberInfo // user -> info
-	roles    map[string]map[string]bool       // user -> role set
-	addCalls []string                         // ordered "user:role"
-	delCalls []string
-	failAdd  map[string]error // "user:role" -> error
-	failDel  map[string]error
-	blockAdd chan struct{} // if non-nil, AddRole blocks until closed
+	mu         sync.Mutex
+	members    map[string]discordapi.MemberInfo // user -> info
+	roles      map[string]map[string]bool       // user -> role set
+	addCalls   []string                         // ordered "user:role"
+	delCalls   []string
+	failAdd    map[string]error // "user:role" -> error
+	failDel    map[string]error
+	blockAdd   chan struct{}            // if non-nil, AddRole blocks until closed
+	blockAddOn map[string]chan struct{} // "user:role" -> blocks until closed
 }
 
 func newFakeDiscord() *fakeDiscord {
 	return &fakeDiscord{
-		members: map[string]discordapi.MemberInfo{},
-		roles:   map[string]map[string]bool{},
-		failAdd: map[string]error{},
-		failDel: map[string]error{},
+		members:    map[string]discordapi.MemberInfo{},
+		roles:      map[string]map[string]bool{},
+		failAdd:    map[string]error{},
+		failDel:    map[string]error{},
+		blockAddOn: map[string]chan struct{}{},
 	}
 }
 
@@ -50,6 +52,9 @@ func (f *fakeDiscord) GetMember(_ context.Context, _, user string) (discordapi.M
 }
 
 func (f *fakeDiscord) AddRole(_ context.Context, _, user, role string) error {
+	if ch := f.blockAddOn[user+":"+role]; ch != nil {
+		<-ch
+	}
 	if f.blockAdd != nil {
 		<-f.blockAdd
 	}
@@ -86,6 +91,7 @@ func (f *fakeDiscord) has(user, role string) bool {
 func testConfig() *config.Config {
 	c := &config.Config{}
 	c.GuildID = "g1"
+	c.Google.AllowedDomains = []string{"example.com"}
 	c.AddRoles = []string{"111", "222"}
 	c.RemoveRoles = []string{"999"}
 	c.UnverifiedRoles = []string{"888"}
@@ -96,6 +102,7 @@ func testConfig() *config.Config {
 
 type harness struct {
 	svc   *Service
+	cfg   *config.Config
 	store *state.Store
 	disc  *fakeDiscord
 	sess  *session.Manager
@@ -109,12 +116,13 @@ func newHarness(t *testing.T) *harness {
 	store := state.NewStore(api.Client(), "ns", "st", slog.Default())
 	disc := newFakeDiscord()
 	sess := session.NewManager(time.Minute)
-	svc := New(testConfig(), store, disc, sess, slog.Default())
+	cfg := testConfig()
+	svc := New(cfg, store, disc, sess, slog.Default())
 	ctx := context.Background()
 	if _, err := store.Load(ctx, "g1"); err != nil {
 		t.Fatal(err)
 	}
-	return &harness{svc: svc, store: store, disc: disc, sess: sess, api: api}
+	return &harness{svc: svc, cfg: cfg, store: store, disc: disc, sess: sess, api: api}
 }
 
 func now() time.Time { return time.Now().UTC() }
@@ -133,7 +141,7 @@ func TestVerifyHappyPath(t *testing.T) {
 	h.disc.member("u1", now().Add(-time.Hour))
 	ctx := context.Background()
 
-	res := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: h.disc.members["u1"].JoinedAt, GoogleSub: "s1", GoogleName: "N", GoogleEmail: "e@ok.com"})
+	res := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: h.disc.members["u1"].JoinedAt, GoogleSub: "s1", GoogleName: "N", GoogleEmail: "e@ok.com"})
 	if res.Status != VerifyVerified {
 		t.Fatalf("expected verified, got %+v", res)
 	}
@@ -161,15 +169,15 @@ func TestVerifyOneToOne(t *testing.T) {
 	h.disc.member("u2", now())
 	ctx := context.Background()
 
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("first: %+v", r)
 	}
 	// Same Google identity, different member.
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u2", GoogleSub: "s1"}); r.Status != VerifyRejected {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u2", GoogleSub: "s1"}); r.Status != VerifyRejected {
 		t.Fatalf("expected 1:1 rejection, got %+v", r)
 	}
 	// Same member, different Google identity.
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", GoogleSub: "s2"}); r.Status != VerifyRejected {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", GoogleSub: "s2"}); r.Status != VerifyRejected {
 		t.Fatalf("expected account rejection, got %+v", r)
 	}
 	if h.disc.has("u2", "111") {
@@ -187,7 +195,7 @@ func TestVerifyRaceExactlyOneLink(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.svc.Verify(ctx, &VerifyInput{MemberID: "u" + string(rune('1'+i)), GoogleSub: "shared"})
+			h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u" + string(rune('1'+i)), GoogleSub: "shared"})
 		}()
 	}
 	wg.Wait()
@@ -211,7 +219,7 @@ func TestVerifyEpochChecked(t *testing.T) {
 	if _, err := h.svc.RevokeCommit(ctx, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	res := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", Epoch: 0, GoogleSub: "s1"})
+	res := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", Epoch: 0, GoogleSub: "s1"})
 	if res.Status != VerifyRejected {
 		t.Fatalf("expected epoch rejection, got %+v", res)
 	}
@@ -225,7 +233,7 @@ func TestReassertionIdempotent(t *testing.T) {
 	j := now().Add(-time.Hour)
 	h.disc.member("u1", j)
 	ctx := context.Background()
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("first: %+v", r)
 	}
 	// Roles get lost (e.g. removed manually).
@@ -233,7 +241,7 @@ func TestReassertionIdempotent(t *testing.T) {
 	// Member rejoined at a newer time; re-verification refreshes the anchor.
 	j2 := now().Add(-time.Minute)
 	h.disc.members["u1"] = discordapi.MemberInfo{JoinedAt: j2}
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", Epoch: 0, JoinedAt: j2, GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", Epoch: 0, JoinedAt: j2, GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("re-assertion: %+v", r)
 	}
 	d := h.doc(t)
@@ -253,7 +261,7 @@ func TestGrantDeferredAndResumed(t *testing.T) {
 	// Role add fails transiently.
 	h.disc.failAdd["u1:222"] = &discordapi.APIError{Status: 500, Permanent: false}
 
-	res := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
+	res := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
 	if res.Status != VerifyPending {
 		t.Fatalf("expected pending, got %+v", res)
 	}
@@ -285,7 +293,7 @@ func TestRevokeFull(t *testing.T) {
 	h.disc.member("u1", j)
 	h.disc.roles["u1"]["888"] = false // start unverified? no: granted member holds roles
 	ctx := context.Background()
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("verify: %+v", r)
 	}
 	// Sessions exist for the member (in-flight login).
@@ -345,11 +353,11 @@ func TestRevokeNeverLinkedBumpsEpochOnly(t *testing.T) {
 	// An in-flight login captured the pre-revocation epoch and must be
 	// rejected at reservation.
 	h.disc.member("ghost", now())
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "ghost", Epoch: 0, GoogleSub: "s9"}); r.Status != VerifyRejected {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "ghost", Epoch: 0, GoogleSub: "s9"}); r.Status != VerifyRejected {
 		t.Fatalf("expected rejection after revocation, got %+v", r)
 	}
 	// A fresh login (post-revocation epoch) may complete.
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "ghost", Epoch: 1, GoogleSub: "s9"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "ghost", Epoch: 1, GoogleSub: "s9"}); r.Status != VerifyVerified {
 		t.Fatalf("expected fresh success, got %+v", r)
 	}
 }
@@ -359,7 +367,7 @@ func TestRevokeDepartedSkipsRoles(t *testing.T) {
 	j := now().Add(-time.Hour)
 	h.disc.member("u1", j)
 	ctx := context.Background()
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("verify: %+v", r)
 	}
 	// Freeze role ops mid-verify is not needed here; simply depart first.
@@ -381,7 +389,7 @@ func TestReconcileDepartures(t *testing.T) {
 	h.disc.member("u3", j)
 	ctx := context.Background()
 	for _, u := range []string{"u1", "u2", "u3"} {
-		if r := h.svc.Verify(ctx, &VerifyInput{MemberID: u, JoinedAt: j, GoogleSub: "s-" + u}); r.Status != VerifyVerified {
+		if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: u, JoinedAt: j, GoogleSub: "s-" + u}); r.Status != VerifyVerified {
 			t.Fatalf("verify %s: %+v", u, r)
 		}
 	}
@@ -401,10 +409,10 @@ func TestReconcileDepartures(t *testing.T) {
 		t.Fatal("departure did not bump epoch")
 	}
 	// Rejoining member must verify afresh: stale epoch rejects.
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u2", Epoch: 0, JoinedAt: now(), GoogleSub: "s-u2"}); r.Status != VerifyRejected {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u2", Epoch: 0, JoinedAt: now(), GoogleSub: "s-u2"}); r.Status != VerifyRejected {
 		t.Fatalf("expected rejection, got %+v", r)
 	}
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u2", Epoch: 1, JoinedAt: now(), GoogleSub: "s-u2"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u2", Epoch: 1, JoinedAt: now(), GoogleSub: "s-u2"}); r.Status != VerifyVerified {
 		t.Fatalf("expected fresh verification, got %+v", r)
 	}
 }
@@ -414,7 +422,7 @@ func TestReconcileAPIOutageNeverDeparts(t *testing.T) {
 	j := now().Add(-time.Hour)
 	h.disc.member("u1", j)
 	ctx := context.Background()
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("verify: %+v", r)
 	}
 	// Simulate API outage: member lookup errors.
@@ -434,7 +442,7 @@ func TestGrantResumptionValidatesMembership(t *testing.T) {
 	ctx := context.Background()
 	// Freeze the second role add so the grant stays pending.
 	h.disc.failAdd["u1:222"] = &discordapi.APIError{Status: 503, Permanent: false}
-	res := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
+	res := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
 	if res.Status != VerifyPending {
 		t.Fatalf("expected pending, got %+v", res)
 	}
@@ -463,12 +471,12 @@ func TestDowntimeCLIRevokeSupersedesPendingGrant(t *testing.T) {
 	ctx := context.Background()
 	// Grant applies 111 then the process "crashes" (fail 222 permanently-ish).
 	h.disc.failAdd["u1:222"] = &discordapi.APIError{Status: 503, Permanent: false}
-	res := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
+	res := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
 	if res.Status != VerifyPending {
 		t.Fatalf("expected pending, got %+v", res)
 	}
 	// Operator CLI revokes during downtime (commit-only).
-	cliRes, err := RevokeCommitOnly(ctx, h.store, "g1", "u1", slog.Default())
+	cliRes, err := RevokeCommitOnly(ctx, h.store, "g1", "u1")
 	if err != nil || !cliRes.CreatedRestoreOp {
 		t.Fatalf("cli revoke: %+v %v", cliRes, err)
 	}
@@ -498,7 +506,7 @@ func TestReVerificationSupersedesPartialRevocation(t *testing.T) {
 	j := now().Add(-2 * time.Hour)
 	h.disc.member("u1", j)
 	ctx := context.Background()
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("verify: %+v", r)
 	}
 	// Slash-command revoke commits, but the restore step only re-adds part
@@ -523,7 +531,7 @@ func TestReVerificationSupersedesPartialRevocation(t *testing.T) {
 	}
 	// Member re-verifies with the same identity under the new epoch.
 	d := h.doc(t)
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", Epoch: d.Epochs["u1"], JoinedAt: now(), GoogleSub: "s1"}); r.Status != VerifyVerified {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", Epoch: d.Epochs["u1"], JoinedAt: now(), GoogleSub: "s1"}); r.Status != VerifyVerified {
 		t.Fatalf("re-verify: %+v", r)
 	}
 	if !h.disc.has("u1", "111") || !h.disc.has("u1", "222") {
@@ -543,11 +551,11 @@ func TestReconcileDiscardsStaleEpochGrant(t *testing.T) {
 	h.disc.member("u1", j)
 	ctx := context.Background()
 	h.disc.failAdd["u1:222"] = &discordapi.APIError{Status: 503, Permanent: false}
-	if r := h.svc.Verify(ctx, &VerifyInput{MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyPending {
+	if r := h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"}); r.Status != VerifyPending {
 		t.Fatalf("expected pending, got %+v", r)
 	}
 	// CLI revocation bumps the epoch while the grant is pending.
-	if _, err := RevokeCommitOnly(ctx, h.store, "g1", "u1", slog.Default()); err != nil {
+	if _, err := RevokeCommitOnly(ctx, h.store, "g1", "u1"); err != nil {
 		t.Fatal(err)
 	}
 	delete(h.disc.failAdd, "u1:222")

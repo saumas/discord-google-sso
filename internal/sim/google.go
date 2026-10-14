@@ -89,14 +89,7 @@ func (g *GoogleSim) Handler() http.Handler {
 }
 
 func (g *GoogleSim) gate(w http.ResponseWriter, r *http.Request) bool {
-	if blocked, status, delay := g.failures.check(r.Method, r.URL.Path); blocked {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		w.WriteHeader(status)
-		return false
-	}
-	return true
+	return !g.failures.gate(w, r)
 }
 
 func (g *GoogleSim) handleDiscovery(w http.ResponseWriter, r *http.Request) {
