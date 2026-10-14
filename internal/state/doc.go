@@ -3,7 +3,6 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -71,23 +70,6 @@ func NewDoc(guildID string) *Doc {
 		Epochs:        map[string]uint64{},
 		Pending:       map[string]*PendingOp{},
 	}
-}
-
-// Clone returns a deep copy of the document (safe for read-modify-write).
-func (d *Doc) Clone() *Doc {
-	if d == nil {
-		return nil
-	}
-	b, err := json.Marshal(d)
-	if err != nil {
-		// Doc only contains JSON-marshalable types; this cannot happen.
-		panic(fmt.Sprintf("state: clone: %v", err))
-	}
-	var out Doc
-	if err := json.Unmarshal(b, &out); err != nil {
-		panic(fmt.Sprintf("state: clone: %v", err))
-	}
-	return &out
 }
 
 // Validate checks document integrity: schema version, guild ownership, and

@@ -60,9 +60,6 @@ type Client struct {
 
 // New returns a Client for the given base URL and credentials.
 func New(baseURL, botToken, clientID, clientSecret, callbackURL string, log *slog.Logger) *Client {
-	if log == nil {
-		log = slog.Default()
-	}
 	return &Client{
 		baseURL:      baseURL,
 		botToken:     botToken,

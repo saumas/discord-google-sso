@@ -20,9 +20,6 @@ type Reconciler struct {
 
 // New returns a Reconciler.
 func New(svc *core.Service, interval time.Duration, log *slog.Logger) *Reconciler {
-	if log == nil {
-		log = slog.Default()
-	}
 	return &Reconciler{svc: svc, interval: interval, log: log}
 }
 

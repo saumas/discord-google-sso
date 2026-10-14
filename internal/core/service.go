@@ -78,12 +78,6 @@ type Service struct {
 
 // New returns a Service.
 func New(cfg *config.Config, store *state.Store, discord RoleAPI, sessions *session.Manager, log *slog.Logger) *Service {
-	if log == nil {
-		log = slog.Default()
-	}
-	if sessions == nil {
-		sessions = session.NewManager(cfg.SessionTTL)
-	}
 	return &Service{cfg: cfg, store: store, discord: discord, sessions: sessions, log: log}
 }
 

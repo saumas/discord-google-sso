@@ -50,6 +50,8 @@ type Store struct {
 
 // NewStore returns a Store for the named Secret in the given namespace.
 func NewStore(client kubernetes.Interface, namespace, name string, log *slog.Logger) *Store {
+	// A nil logger is a supported entry point: the operator CLI passes nil
+	// and uses slog.Default() output.
 	if log == nil {
 		log = slog.Default()
 	}
@@ -220,10 +222,4 @@ func (s *Store) Update(ctx context.Context, guildID string, mutate func(*Doc) er
 		lastErr = errors.New("too many conflicts")
 	}
 	return fmt.Errorf("state update lost all CAS retries: %w", lastErr)
-}
-
-// Bump is a helper used by external entry points (the operator CLI) to run a
-// mutation under the same conflict-retry discipline.
-func (s *Store) Bump(ctx context.Context, guildID string, mutate func(*Doc) error) error {
-	return s.Update(ctx, guildID, mutate)
 }

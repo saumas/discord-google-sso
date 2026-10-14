@@ -57,9 +57,6 @@ type Client struct {
 
 // New returns a Client.
 func New(baseURL, clientID, clientSecret, callbackURL string, leeway time.Duration, log *slog.Logger) *Client {
-	if log == nil {
-		log = slog.Default()
-	}
 	return &Client{
 		baseURL:      baseURL,
 		clientID:     clientID,
