@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -224,8 +227,7 @@ func scSlashRevoke(e *env) error {
 	if status != 200 || !strings.Contains(respBody, "accepted") {
 		return fmt.Errorf("ack: status %d body %s", status, respBody)
 	}
-	fu, ok := e.waitFollowup(1, "Revocation complete")
-	if !ok {
+	if _, ok := e.waitFollowup(1, "Revocation complete"); !ok {
 		return fmt.Errorf("completion follow-up not delivered: %v", e.followups())
 	}
 	if e.stateMember(userMain) != nil {
@@ -240,7 +242,6 @@ func scSlashRevoke(e *env) error {
 	if !e.hasRole(userMain, roleUnrelated) {
 		return fmt.Errorf("unrelated role lost: %v", e.memberRoles(userMain))
 	}
-	_ = fu
 	// Re-verify so later scenarios start from a verified member.
 	return expectBody(verifyUser(e, userMain, gIDWorkspace), "Verification complete")
 }
@@ -265,13 +266,13 @@ func scSlashRevokeUnauthorized(e *env) error {
 
 func scSlashRevokeBadSignature(e *env) error {
 	p := revokeCommand(userMain, userAdmin, []string{roleAdmin})
-	body, _ := jsonMarshal(p)
+	body, _ := json.Marshal(p)
 	ts := fmt.Sprint(time.Now().Unix())
-	req, _ := httpNewRequest("POST", e.appURL+"/interactions", body)
+	req, _ := http.NewRequest("POST", e.appURL+"/interactions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signature-Timestamp", ts)
 	req.Header.Set("X-Signature-Ed25519", strings.Repeat("00", 64)) // invalid
-	resp, err := httpDefaultClient().Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

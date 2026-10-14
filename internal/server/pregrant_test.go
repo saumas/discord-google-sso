@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/saumas/discord-google-sso/internal/state"
 )
 
 // discFail injects a Discord sim failure and registers cleanup.
@@ -40,9 +38,8 @@ func (e *testEnv) driveDiscordLeg(t *testing.T) string {
 // and show a clear retry message.
 func TestPreGrantTransientFailuresFailSafely(t *testing.T) {
 	cases := []struct {
-		name   string
-		fail   map[string]any
-		google bool // failure is on the Google leg (full flow)
+		name string
+		fail map[string]any
 	}{
 		{
 			name: "discord token exchange 5xx with marker body",
@@ -69,14 +66,7 @@ func TestPreGrantTransientFailuresFailSafely(t *testing.T) {
 			e.member(t, "u1", []string{"888", "889", "777"})
 			e.discFail(t, tc.fail)
 
-			var body string
-			if tc.google {
-				status, b := e.driveFlow(t, true, true)
-				_ = status
-				body = b
-			} else {
-				body = e.driveDiscordLeg(t)
-			}
+			body := e.driveDiscordLeg(t)
 			if !strings.Contains(body, "temporary error occurred") {
 				t.Fatalf("expected safe retry page, got: %q", clip(body, 200))
 			}
@@ -164,8 +154,7 @@ func TestGoogleTokenExchangeFailureFailsSafely(t *testing.T) {
 	post(t, e.client, e.googleH.URL+"/_admin/fail", map[string]any{"path": "/token", "status": 500})
 	t.Cleanup(func() { post(t, e.client, e.googleH.URL+"/_admin/clear-failures", nil) })
 
-	status, body := e.driveFlow(t, true, true)
-	_ = status
+	_, body := e.driveFlow(t, true, true)
 	if !strings.Contains(body, "temporary error occurred") {
 		t.Fatalf("expected retry page, got %q", clip(body, 200))
 	}
@@ -177,5 +166,3 @@ func TestGoogleTokenExchangeFailureFailsSafely(t *testing.T) {
 		t.Fatalf("google exchange failure stored durable state: %+v", d)
 	}
 }
-
-var _ = state.SchemaVersion

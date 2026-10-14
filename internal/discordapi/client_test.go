@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -13,7 +14,7 @@ func TestVerifyInteractionRequest(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	pubHex := hex.EncodeToString(pub)
 	body := []byte(`{"type":1}`)
-	ts := itoa(time.Now().Unix())
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	sig := hex.EncodeToString(ed25519.Sign(priv, append([]byte(ts), body...)))
 
 	if err := VerifyInteractionRequest(pubHex, ts, sig, body); err != nil {
@@ -25,28 +26,16 @@ func TestVerifyInteractionRequest(t *testing.T) {
 	if err := VerifyInteractionRequest(pubHex, ts, "00"+sig[2:], body); err == nil {
 		t.Fatal("wrong signature accepted")
 	}
-	old := itoa(time.Now().Add(-time.Hour).Unix())
+	old := strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)
 	oldSig := hex.EncodeToString(ed25519.Sign(priv, append([]byte(old), body...)))
 	if err := VerifyInteractionRequest(pubHex, old, oldSig, body); err == nil {
 		t.Fatal("stale timestamp accepted")
 	}
 }
 
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
-}
-
 func TestClientMemberLookup(t *testing.T) {
 	joined := "2026-10-01T12:00:00.936000+00:00"
-	srv := startTestServer(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/v10/guilds/g/members/known":
 			_, _ = w.Write([]byte(`{"user":{"id":"known"},"joined_at":"` + joined + `","roles":["1"]}`))
@@ -56,7 +45,7 @@ func TestClientMemberLookup(t *testing.T) {
 		default:
 			w.WriteHeader(http.StatusTeapot)
 		}
-	})
+	}))
 	defer srv.Close()
 	c := New(srv.URL, "bot", "cid", "csecret", "cb", nil)
 
@@ -74,8 +63,4 @@ func TestClientMemberLookup(t *testing.T) {
 	if _, err := c.GetMember(t.Context(), "g", "x"); err == nil {
 		t.Fatal("expected error on 418")
 	}
-}
-
-func startTestServer(h http.HandlerFunc) *httptest.Server {
-	return httptest.NewServer(h)
 }

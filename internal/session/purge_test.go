@@ -23,11 +23,11 @@ func TestStartPurgesExpired(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	fresh := m.Start()
+	m.Start()
 	m.mu.Lock()
 	n := len(m.byID)
 	m.mu.Unlock()
-	if n != 2 { // inFlight + fresh
+	if n != 2 { // inFlight + the session started above
 		t.Fatalf("expected 2 live sessions, got %d", n)
 	}
 	if _, err := m.Consume(abandoned.DiscordState, StageDiscord); err == nil {
@@ -36,5 +36,4 @@ func TestStartPurgesExpired(t *testing.T) {
 	if _, err := m.Consume(inFlight.DiscordState, StageDiscord); err != nil {
 		t.Fatalf("live session lost: %v", err)
 	}
-	_ = fresh
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -179,12 +180,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("DGS_ALLOWED_DOMAINS contains invalid domain %q", d)
 		}
 	}
-	for _, r := range append(append([]string{}, c.AddRoles...), c.RemoveRoles...) {
-		if !isNumeric(r) {
-			return fmt.Errorf("role IDs must be numeric, got %q", r)
-		}
-	}
-	for _, r := range c.UnverifiedRoles {
+	for _, r := range slices.Concat(c.AddRoles, c.RemoveRoles, c.UnverifiedRoles) {
 		if !isNumeric(r) {
 			return fmt.Errorf("role IDs must be numeric, got %q", r)
 		}

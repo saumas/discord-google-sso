@@ -577,15 +577,15 @@ func (s *Service) Reconcile(ctx context.Context) {
 
 	// Pending-op resumption, covering every stored operation including
 	// members whose link is already released (revocation operations).
-	doc2, err := s.store.Load(ctx, guild)
+	doc, err = s.store.Load(ctx, guild)
 	if err != nil {
 		s.log.Error("reconcile: state reload failed; skipping resumption", "error", err.Error())
 		return
 	}
-	for memberID, op := range doc2.Pending {
+	for memberID, op := range doc.Pending {
 		switch op.Kind {
 		case state.OpGrant:
-			if doc2.Epoch(memberID) != op.Epoch {
+			if doc.Epoch(memberID) != op.Epoch {
 				// Superseded by a revocation: discard the grant; the
 				// revocation operation owns the terminal state.
 				if err := s.updateOp(ctx, memberID, op.OpID, state.OpGrant, func(d *state.Doc, _ *state.PendingOp) {

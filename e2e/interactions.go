@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -108,7 +109,7 @@ func (e *env) waitFollowup(n int, substr string) (string, bool) {
 		fs := e.followups()
 		if len(fs) >= n {
 			for _, f := range fs {
-				if substr == "" || contains(f, substr) {
+				if substr == "" || strings.Contains(f, substr) {
 					return f, true
 				}
 			}
@@ -117,22 +118,3 @@ func (e *env) waitFollowup(n int, substr string) (string, bool) {
 	}
 	return "", false
 }
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || indexOfStr(s, sub) >= 0)
-}
-
-func indexOfStr(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
-func httpNewRequest(method, url string, body []byte) (*http.Request, error) {
-	return http.NewRequest(method, url, bytes.NewReader(body))
-}
-func httpDefaultClient() *http.Client { return http.DefaultClient }

@@ -248,7 +248,7 @@ func (c *Client) ValidateIDToken(ctx context.Context, idToken, wantNonce string)
 		return nil, errors.New("id token: malformed payload")
 	}
 	if payload.Iss != d.Issuer {
-		return nil, fmt.Errorf("id token: issuer mismatch")
+		return nil, errors.New("id token: issuer mismatch")
 	}
 	if payload.Aud != c.clientID {
 		return nil, errors.New("id token: audience mismatch")

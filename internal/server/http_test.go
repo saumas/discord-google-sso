@@ -256,9 +256,6 @@ func extractHidden(page, name string) string {
 	key := "name=\"" + name + "\" value=\""
 	i := strings.Index(page, key)
 	if i < 0 {
-		// Try reversed order (value before name).
-		key2 := "value=\""
-		_ = key2
 		return ""
 	}
 	rest := page[i+len(key):]
@@ -455,11 +452,4 @@ func TestLogsNeverContainOAuthMaterial(t *testing.T) {
 			t.Fatalf("log redaction failure: %q appears in logs", s[:min(16, len(s))])
 		}
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

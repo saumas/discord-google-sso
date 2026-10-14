@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -56,9 +57,9 @@ spec:
 		{"google-sim", googleArgs, fmt.Sprint(nodePortGoog)},
 	} {
 		manifest := simDeploy
-		manifest = replaceAll(manifest, "%NAME%", s.name)
-		manifest = replaceAll(manifest, "%ARGS%", s.args)
-		manifest = replaceAll(manifest, "%NODEPORT%", s.port)
+		manifest = strings.ReplaceAll(manifest, "%NAME%", s.name)
+		manifest = strings.ReplaceAll(manifest, "%ARGS%", s.args)
+		manifest = strings.ReplaceAll(manifest, "%NODEPORT%", s.port)
 		e.applyManifest(manifest)
 	}
 	// Wait for both sims to answer.
@@ -89,31 +90,4 @@ func (e *env) waitURL(url string) error {
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("timeout waiting for %s", url)
-}
-
-func replaceAll(s, old, new string) string {
-	for {
-		t := replaceOne(s, old, new)
-		if t == s {
-			return s
-		}
-		s = t
-	}
-}
-
-func replaceOne(s, old, new string) string {
-	i := indexOf(s, old)
-	if i < 0 {
-		return s
-	}
-	return s[:i] + new + s[i+len(old):]
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

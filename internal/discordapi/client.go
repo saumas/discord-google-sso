@@ -325,7 +325,7 @@ func (c *Client) request(ctx context.Context, method, path, op, auth, contentTyp
 }
 
 func backoff(attempt int) time.Duration {
-	d := requestPause * time.Duration(1<<uint(attempt-1))
+	d := requestPause * time.Duration(1<<(attempt-1))
 	if d > 2*time.Second {
 		d = 2 * time.Second
 	}

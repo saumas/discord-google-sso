@@ -497,7 +497,6 @@ func TestDowntimeCLIRevokeSupersedesPendingGrant(t *testing.T) {
 	if op == nil || op.Kind != state.OpRevoke {
 		t.Fatalf("revoke op missing: %+v", op)
 	}
-	want := state.UnionStrings([]string{"111", "222"}, []string{"111"})
 	if len(op.RemoveRoles) != 2 {
 		t.Fatalf("removal set should be union of intended+applied: %+v", op.RemoveRoles)
 	}
@@ -510,7 +509,6 @@ func TestDowntimeCLIRevokeSupersedesPendingGrant(t *testing.T) {
 	if !h.disc.has("u1", "888") {
 		t.Fatal("unverified role not restored")
 	}
-	_ = want
 }
 
 func TestReVerificationSupersedesPartialRevocation(t *testing.T) {
@@ -526,10 +524,6 @@ func TestReVerificationSupersedesPartialRevocation(t *testing.T) {
 	if _, err := h.svc.RevokeCommit(ctx, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	h.disc.mu.Lock()
-	restore := h.disc.roles["u1"]
-	_ = restore
-	h.disc.mu.Unlock()
 	// Manually apply a partial restore: remove granted, re-add one unverified.
 	_ = h.disc.RemoveRole(ctx, "g1", "u1", "111")
 	_ = h.disc.RemoveRole(ctx, "g1", "u1", "222")

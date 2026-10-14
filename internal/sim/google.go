@@ -252,7 +252,7 @@ func (g *GoogleSim) adminReset(w http.ResponseWriter, r *http.Request) {
 	g.issuedSecrets = nil
 	g.mangleNonce = false
 	g.mu.Unlock()
-	g.failures.reset()
+	g.failures.clear()
 	w.WriteHeader(http.StatusNoContent)
 }
 

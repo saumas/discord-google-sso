@@ -73,4 +73,6 @@ func TestLoopStopsOnContextCancel(t *testing.T) {
 	}
 }
 
-var _ = core.New // keep the production constructor referenced
+// The production constructor wiring is exercised separately; this
+// assertion keeps the core import honest about the loop's seam.
+var _ reconcileAPI = (*core.Service)(nil)

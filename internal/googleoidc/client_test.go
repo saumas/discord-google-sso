@@ -156,12 +156,10 @@ func TestValidateIDTokenAlgorithmAllowlist(t *testing.T) {
 	// HMAC-SHA256 keyed with the RSA public key DER would be required for a
 	// real confusion attack; for the test any HMAC-ish signature suffices to
 	// prove the header is rejected before verification.
-	sig := digest[:]
-	hs256 := input + "." + enc.EncodeToString(sig)
+	hs256 := input + "." + enc.EncodeToString(digest[:])
 	if _, err := c.ValidateIDToken(ctx, hs256, "n1"); err == nil {
 		t.Fatal("alg=HS256 accepted")
 	}
-	_ = crypto.SHA256
 }
 
 func TestAuthorizeURL(t *testing.T) {

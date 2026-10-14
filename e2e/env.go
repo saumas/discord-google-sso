@@ -373,13 +373,14 @@ func (e *env) stateMember(id string) *state.Member {
 
 // --- sim admin ---
 
-func (e *env) discAdmin(method, path string, body any) map[string]any {
+// admin posts an admin request to a simulator's admin endpoint.
+func (e *env) admin(base, method, path string, body any) map[string]any {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, e.discURL+path, rd)
+	req, _ := http.NewRequest(method, base+path, rd)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		panic(err)
@@ -391,22 +392,12 @@ func (e *env) discAdmin(method, path string, body any) map[string]any {
 	return out
 }
 
+func (e *env) discAdmin(method, path string, body any) map[string]any {
+	return e.admin(e.discURL, method, path, body)
+}
+
 func (e *env) googAdmin(method, path string, body any) map[string]any {
-	var rd io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
-	}
-	req, _ := http.NewRequest(method, e.googURL+path, rd)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	var out map[string]any
-	_ = json.Unmarshal(b, &out)
-	return out
+	return e.admin(e.googURL, method, path, body)
 }
 
 func (e *env) discDump() map[string]any { return e.discAdmin("GET", "/_admin/dump", nil) }

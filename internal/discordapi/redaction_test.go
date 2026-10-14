@@ -2,6 +2,7 @@ package discordapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -32,18 +33,10 @@ func TestNoLogBodySuppressesTokenEndpointBody(t *testing.T) {
 		t.Fatalf("token-endpoint response body leaked into error: %v", err)
 	}
 	var ae *APIError
-	if !asAPIError(err, &ae) {
+	if !errors.As(err, &ae) {
 		t.Fatalf("expected APIError, got %T", err)
 	}
 	if ae.Body != "response body suppressed" {
 		t.Fatalf("unexpected APIError body: %q", ae.Body)
 	}
-}
-
-func asAPIError(err error, target **APIError) bool {
-	ae, ok := err.(*APIError)
-	if ok {
-		*target = ae
-	}
-	return ok
 }

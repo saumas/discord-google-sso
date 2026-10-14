@@ -71,12 +71,7 @@ func (f *failureEngine) add(fa Failure) {
 	f.failures = append(f.failures, fa)
 }
 
-func (f *failureEngine) reset() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.failures = nil
-}
-
+// clear removes all injected failures.
 func (f *failureEngine) clear() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -90,7 +85,7 @@ func (f *failureEngine) check(method, path string) (bool, int, time.Duration, st
 	defer f.mu.Unlock()
 	for i := range f.failures {
 		fa := &f.failures[i]
-		if fa.Path != "" && contains(path, fa.Path) && (fa.Method == "" || fa.Method == method) {
+		if fa.Path != "" && strings.Contains(path, fa.Path) && (fa.Method == "" || fa.Method == method) {
 			if fa.Count > 0 {
 				fa.Count--
 			}
@@ -116,10 +111,6 @@ func (f *failureEngine) gate(w http.ResponseWriter, r *http.Request) bool {
 		_, _ = io.WriteString(w, body)
 	}
 	return true
-}
-
-func contains(s, sub string) bool {
-	return strings.Contains(s, sub)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -421,7 +412,7 @@ func (d *DiscordSim) adminReset(w http.ResponseWriter, r *http.Request) {
 	d.followups = nil
 	d.issuedSecrets = nil
 	d.mu.Unlock()
-	d.failures.reset()
+	d.failures.clear()
 	w.WriteHeader(http.StatusNoContent)
 }
 
