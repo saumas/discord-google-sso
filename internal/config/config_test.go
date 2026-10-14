@@ -43,19 +43,21 @@ func TestLoadValid(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsMissingRequired(t *testing.T) {
-	validEnv(t)
-	setenv(t, "DISCORD_BOT_TOKEN", "")
-	if _, err := Load(); err == nil {
-		t.Fatal("missing bot token accepted")
+func TestLoadRejectsInvalidConfig(t *testing.T) {
+	cases := []struct {
+		name, key, value string
+	}{
+		{"missing bot token", "DISCORD_BOT_TOKEN", ""},
+		{"malformed public key", "DISCORD_PUBLIC_KEY", "zzzz"},
 	}
-}
-
-func TestLoadRejectsBadPublicKey(t *testing.T) {
-	validEnv(t)
-	setenv(t, "DISCORD_PUBLIC_KEY", "zzzz")
-	if _, err := Load(); err == nil {
-		t.Fatal("bad public key accepted")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			validEnv(t)
+			setenv(t, tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s accepted", tc.name)
+			}
+		})
 	}
 }
 

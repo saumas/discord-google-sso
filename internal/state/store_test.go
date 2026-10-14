@@ -46,47 +46,50 @@ func TestLoadRejectsForeignGuild(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsCorrupt(t *testing.T) {
-	store, srv := newTestStore(t)
-	ctx := context.Background()
-	if _, err := store.Load(ctx, "g"); err != nil {
-		t.Fatalf("load: %v", err)
+// TestLoadRejectsBadState covers the corrupt/foreign state refusals that
+// share the same shape: install a bad payload, expect a clear Load error
+// rather than a reset.
+func TestLoadRejectsBadState(t *testing.T) {
+	cases := []struct {
+		name    string
+		install func(t *testing.T, sec *corev1.Secret)
+	}{
+		{
+			name: "corrupt payload",
+			install: func(_ *testing.T, sec *corev1.Secret) {
+				sec.Data[DataKey] = []byte("not gzip at all")
+			},
+		},
+		{
+			name: "unknown schema version",
+			install: func(t *testing.T, sec *corev1.Secret) {
+				var doc Doc
+				doc.SchemaVersion = 99
+				doc.GuildID = "g"
+				doc.Members = map[string]*Member{}
+				sec.Data[DataKey] = mustGzip(t, &doc)
+			},
+		},
 	}
-	// Overwrite the secret with garbage.
-	bad := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "state-secret", Namespace: "test-ns"}, Data: map[string][]byte{DataKey: []byte("not gzip at all")}}
-	sec, err := srv.Client().CoreV1().Secrets("test-ns").Get(ctx, "state-secret", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bad.ResourceVersion = sec.ResourceVersion
-	if _, err := srv.Client().CoreV1().Secrets("test-ns").Update(ctx, bad, metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Load(ctx, "g"); err == nil {
-		t.Fatal("expected corruption refusal")
-	}
-}
-
-func TestLoadRejectsUnknownSchemaVersion(t *testing.T) {
-	store, srv := newTestStore(t)
-	ctx := context.Background()
-	if _, err := store.Load(ctx, "g"); err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	var doc Doc
-	doc.SchemaVersion = 99
-	doc.GuildID = "g"
-	doc.Members = map[string]*Member{}
-	sec, err := srv.Client().CoreV1().Secrets("test-ns").Get(ctx, "state-secret", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sec.Data[DataKey] = mustGzip(t, &doc)
-	if _, err := srv.Client().CoreV1().Secrets("test-ns").Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Load(ctx, "g"); err == nil {
-		t.Fatal("expected unknown-schema refusal")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, srv := newTestStore(t)
+			ctx := context.Background()
+			if _, err := store.Load(ctx, "g"); err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			sec, err := srv.Client().CoreV1().Secrets("test-ns").Get(ctx, "state-secret", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.install(t, sec)
+			if _, err := srv.Client().CoreV1().Secrets("test-ns").Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Load(ctx, "g"); err == nil {
+				t.Fatalf("%s accepted", tc.name)
+			}
+		})
 	}
 }
 

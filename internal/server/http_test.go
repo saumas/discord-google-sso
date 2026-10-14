@@ -289,62 +289,70 @@ func TestFlowHappyPath(t *testing.T) {
 	}
 }
 
-func TestFlowNonMemberRejected(t *testing.T) {
-	e := newTestEnv(t)
-	if _, err := e.store.Load(context.Background(), e.guild); err != nil {
-		t.Fatal(err)
+// TestFlowPolicyRejections covers every browser-flow rejection driven by
+// organization policy or membership: each case must render the rejection
+// page (never raw OAuth internals) and store no durable state.
+func TestFlowPolicyRejections(t *testing.T) {
+	cases := []struct {
+		name     string
+		user     string
+		member   bool
+		google   map[string]any
+		wantBody string
+	}{
+		{
+			name:     "non-member",
+			user:     "outsider",
+			member:   false,
+			google:   map[string]any{"sub": "s2", "email": "a@example.com", "hd": "example.com", "email_verified": true},
+			wantBody: "not currently a member",
+		},
+		{
+			name:     "unapproved-domain",
+			user:     "u1",
+			member:   true,
+			google:   map[string]any{"sub": "s3", "email": "a@evil.com", "hd": "evil.com", "email_verified": true},
+			wantBody: "approved organization",
+		},
+		{
+			name:     "consumer-no-hd",
+			user:     "u1",
+			member:   true,
+			google:   map[string]any{"sub": "s4", "email": "a@gmail.com", "email_verified": true},
+			wantBody: "approved organization",
+		},
+		{
+			name:     "unverified-email",
+			user:     "u1",
+			member:   true,
+			google:   map[string]any{"sub": "s5", "email": "a@example.com", "hd": "example.com", "email_verified": false},
+			wantBody: "not verified",
+		},
 	}
-	e.loginDiscord(t, "outsider")
-	e.loginGoogle(t, map[string]any{"sub": "s2", "email": "a@example.com", "hd": "example.com", "email_verified": true})
-	status, body := e.driveFlow(t, true, true)
-	if status != http.StatusForbidden || !strings.Contains(body, "not currently a member") {
-		t.Fatalf("status %d body %s", status, body)
-	}
-	d, _ := e.store.Load(context.Background(), e.guild)
-	if len(d.Members) != 0 {
-		t.Fatal("non-member stored")
-	}
-}
-
-func TestFlowUnapprovedDomain(t *testing.T) {
-	e := newTestEnv(t)
-	if _, err := e.store.Load(context.Background(), e.guild); err != nil {
-		t.Fatal(err)
-	}
-	e.loginDiscord(t, "u1")
-	e.loginGoogle(t, map[string]any{"sub": "s3", "email": "a@evil.com", "hd": "evil.com", "email_verified": true})
-	e.member(t, "u1", nil)
-	status, body := e.driveFlow(t, true, true)
-	if status != http.StatusForbidden || !strings.Contains(body, "approved organization") {
-		t.Fatalf("status %d body %s", status, body)
-	}
-}
-
-func TestFlowMissingHd(t *testing.T) {
-	e := newTestEnv(t)
-	if _, err := e.store.Load(context.Background(), e.guild); err != nil {
-		t.Fatal(err)
-	}
-	e.loginDiscord(t, "u1")
-	e.loginGoogle(t, map[string]any{"sub": "s4", "email": "a@gmail.com", "email_verified": true})
-	e.member(t, "u1", nil)
-	status, body := e.driveFlow(t, true, true)
-	if status != http.StatusForbidden || !strings.Contains(body, "approved organization") {
-		t.Fatalf("status %d body %s", status, body)
-	}
-}
-
-func TestFlowUnverifiedEmail(t *testing.T) {
-	e := newTestEnv(t)
-	if _, err := e.store.Load(context.Background(), e.guild); err != nil {
-		t.Fatal(err)
-	}
-	e.loginDiscord(t, "u1")
-	e.loginGoogle(t, map[string]any{"sub": "s5", "email": "a@example.com", "hd": "example.com", "email_verified": false})
-	e.member(t, "u1", nil)
-	status, body := e.driveFlow(t, true, true)
-	if status != http.StatusForbidden || !strings.Contains(body, "not verified") {
-		t.Fatalf("status %d body %s", status, body)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			ctx := context.Background()
+			if _, err := e.store.Load(ctx, e.guild); err != nil {
+				t.Fatal(err)
+			}
+			e.loginDiscord(t, tc.user)
+			e.loginGoogle(t, tc.google)
+			if tc.member {
+				e.member(t, tc.user, nil)
+			}
+			status, body := e.driveFlow(t, true, true)
+			if status != http.StatusForbidden || !strings.Contains(body, tc.wantBody) {
+				t.Fatalf("status %d body %s", status, body)
+			}
+			d, err := e.store.Load(ctx, e.guild)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(d.Members) != 0 || len(d.Pending) != 0 {
+				t.Fatalf("rejected attempt stored durable state: %+v", d)
+			}
+		})
 	}
 }
 
