@@ -73,25 +73,22 @@ var (
 
 // env is the shared E2E environment.
 type env struct {
-	cluster     string
-	kubeconfig  string
-	nodeIP      string
-	appURL      string
-	discURL     string
-	googURL     string
-	priv        ed25519.PrivateKey
-	pubHex      string
-	client      kubernetes.Interface
-	browser     *browser
-	adminToken  string
-	workDir     string
-	releaseDir  string
-	issuedSoFar []string // provider-issued secrets seen (for redaction check)
+	cluster    string
+	kubeconfig string
+	nodeIP     string
+	appURL     string
+	discURL    string
+	googURL    string
+	priv       ed25519.PrivateKey
+	pubHex     string
+	client     kubernetes.Interface
+	browser    *browser
+	releaseDir string
 }
 
 func (e *env) teardown() {
 	fmt.Println("deleting cluster...")
-	runCmd("", "kind", "delete", "cluster", "--name", e.cluster)
+	_, _ = runCmd("", "kind", "delete", "cluster", "--name", e.cluster)
 }
 
 func runCmd(dir, name string, args ...string) (string, error) {
@@ -145,7 +142,7 @@ func setup(ctx context.Context, cluster string) (*env, error) {
 	}
 
 	fmt.Println("[setup] creating kind cluster", cluster)
-	runCmd(repo, "kind", "delete", "cluster", "--name", cluster) // idempotent rerun
+	_, _ = runCmd(repo, "kind", "delete", "cluster", "--name", cluster) // idempotent rerun
 	kubeconfig := filepath.Join(os.TempDir(), cluster+".kubeconfig")
 	kcfgYAML := `kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -316,11 +313,11 @@ func (e *env) waitReady() error {
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(e.appURL + "/readyz")
 		if err == nil && resp.StatusCode == 200 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil
 		}
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -387,7 +384,7 @@ func (e *env) discAdmin(method, path string, body any) map[string]any {
 	if err != nil {
 		panic(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)
@@ -405,7 +402,7 @@ func (e *env) googAdmin(method, path string, body any) map[string]any {
 	if err != nil {
 		panic(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)

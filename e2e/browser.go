@@ -35,8 +35,6 @@ func newBrowser(ctx context.Context) (*browser, error) {
 	return b, nil
 }
 
-func (b *browser) close() { b.cancel() }
-
 type step int
 
 const (

@@ -354,7 +354,7 @@ func (c *Client) once(ctx context.Context, method, path, auth, contentType strin
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return resp.StatusCode, nil, err

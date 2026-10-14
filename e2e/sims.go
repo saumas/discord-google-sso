@@ -81,7 +81,7 @@ func (e *env) waitURL(url string) error {
 	for time.Now().Before(deadline) {
 		resp, err := httpGetNoFollow(url)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
 				return nil
 			}

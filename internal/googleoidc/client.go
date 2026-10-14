@@ -133,7 +133,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("oidc token exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	// Bodies of token endpoints are never surfaced (they contain tokens).
 	if resp.StatusCode != http.StatusOK {
@@ -168,7 +168,7 @@ func (c *Client) fetchJWKS(ctx context.Context, d *DiscoveryDoc) (map[string]cry
 	if err != nil {
 		return nil, fmt.Errorf("jwks fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("jwks fetch: status %d", resp.StatusCode)
 	}
@@ -322,7 +322,7 @@ func (c *Client) getJSON(ctx context.Context, url string, out any, _ bodyPolicy)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}

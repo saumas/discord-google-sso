@@ -134,7 +134,7 @@ func scPolicyRejections(e *env) error {
 		if err := expectBody(body, tc.want); err != nil {
 			return fmt.Errorf("%s: %w", tc.name, err)
 		}
-		if e.hasRole(userMain, roleVerified1) != true {
+		if !e.hasRole(userMain, roleVerified1) {
 			// userMain is already verified from the happy path; policy
 			// failures must disturb nothing.
 			return fmt.Errorf("%s: prior verified roles disturbed", tc.name)
@@ -275,7 +275,7 @@ func scSlashRevokeBadSignature(e *env) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 401 {
 		return fmt.Errorf("invalid signature accepted: %d", resp.StatusCode)
 	}

@@ -133,7 +133,7 @@ func post(t *testing.T, c *http.Client, u string, body any) *http.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp
 }
 
@@ -209,7 +209,7 @@ func getBody(t *testing.T, c *http.Client, u string) string {
 func getBodyString(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	b, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		t.Fatal(err)
 	}

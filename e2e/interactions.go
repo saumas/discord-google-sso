@@ -53,7 +53,7 @@ func (e *env) postInteraction(p *interactionPayload) (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b), nil
 }

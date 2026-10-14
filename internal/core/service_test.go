@@ -511,9 +511,9 @@ func TestReVerificationSupersedesPartialRevocation(t *testing.T) {
 	_ = restore
 	h.disc.mu.Unlock()
 	// Manually apply a partial restore: remove granted, re-add one unverified.
-	h.disc.RemoveRole(ctx, "g1", "u1", "111")
-	h.disc.RemoveRole(ctx, "g1", "u1", "222")
-	h.disc.AddRole(ctx, "g1", "u1", "888")
+	_ = h.disc.RemoveRole(ctx, "g1", "u1", "111")
+	_ = h.disc.RemoveRole(ctx, "g1", "u1", "222")
+	_ = h.disc.AddRole(ctx, "g1", "u1", "888")
 	// Record the partial restore progress as the service would.
 	if err := h.store.Update(ctx, "g1", func(d *state.Doc) error {
 		d.Pending["u1"].RestoredSoFar = []string{"888"}

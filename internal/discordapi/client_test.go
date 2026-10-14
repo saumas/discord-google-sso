@@ -13,8 +13,7 @@ func TestVerifyInteractionRequest(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	pubHex := hex.EncodeToString(pub)
 	body := []byte(`{"type":1}`)
-	ts := time.Now().Format("1234567890")
-	ts = itoa(time.Now().Unix())
+	ts := itoa(time.Now().Unix())
 	sig := hex.EncodeToString(ed25519.Sign(priv, append([]byte(ts), body...)))
 
 	if err := VerifyInteractionRequest(pubHex, ts, sig, body); err != nil {
@@ -50,10 +49,10 @@ func TestClientMemberLookup(t *testing.T) {
 	srv := startTestServer(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/guilds/g/members/known":
-			w.Write([]byte(`{"user":{"id":"known"},"joined_at":"` + joined + `","roles":["1"]}`))
+			_, _ = w.Write([]byte(`{"user":{"id":"known"},"joined_at":"` + joined + `","roles":["1"]}`))
 		case r.Method == "GET" && r.URL.Path == "/api/guilds/g/members/gone":
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(`{"message":"Unknown Member","code":10007}`))
+			_, _ = w.Write([]byte(`{"message":"Unknown Member","code":10007}`))
 		default:
 			w.WriteHeader(http.StatusTeapot)
 		}

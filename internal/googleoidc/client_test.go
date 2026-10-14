@@ -30,7 +30,7 @@ func newTestOP(t *testing.T) *testOP {
 	op := &testOP{key: key, kid: "k1"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"issuer":                 op.srv.URL,
 			"authorization_endpoint": op.srv.URL + "/auth",
 			"token_endpoint":         op.srv.URL + "/token",
@@ -38,7 +38,7 @@ func newTestOP(t *testing.T) *testOP {
 		})
 	})
 	mux.HandleFunc("GET /certs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"keys": []map[string]string{{
 				"kty": "RSA", "alg": "RS256", "use": "sig", "kid": op.kid,
 				"n": base64.RawURLEncoding.EncodeToString(op.key.N.Bytes()),
@@ -55,7 +55,7 @@ func newTestOP(t *testing.T) *testOP {
 			"name": "N", "exp": time.Now().Add(time.Hour).Unix(),
 			"nonce": "nonce-" + code,
 		})
-		json.NewEncoder(w).Encode(map[string]string{"id_token": idt})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id_token": idt})
 	})
 	op.srv = httptest.NewServer(mux)
 	t.Cleanup(op.srv.Close)
