@@ -470,8 +470,14 @@ func (s *Service) applyRevokeOp(ctx context.Context, memberID string) error {
 	if err != nil {
 		return err
 	}
-	if op == nil || op.Kind != state.OpRevoke {
-		return nil // superseded or already applied
+	if op == nil {
+		return nil // genuinely already applied
+	}
+	if op.Kind != state.OpRevoke {
+		// The revocation operation was replaced (e.g. by a re-verification
+		// reservation landing between the commit and this role step): report
+		// supersession so callers never claim restoration completed.
+		return ErrSuperseded
 	}
 
 	// Membership is evaluated when the role step executes. API failures
@@ -549,10 +555,17 @@ func (s *Service) Reconcile(ctx context.Context) {
 			}
 			s.log.Info("reconcile: releasing link after departure", "member", memberID, "reason", why)
 			released := false
-			if err := s.store.Update(ctx, guild, func(d *state.Doc) error {
+			// Serialize with in-flight role work for this member (same
+			// discipline as Verify/RevokeCommit): the release cannot commit
+			// between a grant's currency check and its Discord call, so no
+			// role lands after the release without a durable record.
+			unlock := s.lockMember(memberID)
+			err := s.store.Update(ctx, guild, func(d *state.Doc) error {
 				released = d.ApplyDepartureRelease(memberID, link.JoinedAt)
 				return nil
-			}); err != nil {
+			})
+			unlock()
+			if err != nil {
 				s.log.Error("reconcile: departure release write failed", "member", memberID, "error", err.Error())
 				continue
 			}
@@ -592,6 +605,8 @@ func (s *Service) Reconcile(ctx context.Context) {
 			if info.NotFound || info.JoinedAt.After(op.MemberJoinedAt) {
 				s.log.Info("reconcile: discarding grant with stale membership attestation", "member", memberID)
 				released := false
+				// Serialize with in-flight role work (see the sweep branch).
+				unlock := s.lockMember(memberID)
 				err := s.store.Update(ctx, guild, func(d *state.Doc) error {
 					if cur := d.Pending[memberID]; cur != nil && cur.OpID == op.OpID {
 						delete(d.Pending, memberID)
@@ -599,6 +614,7 @@ func (s *Service) Reconcile(ctx context.Context) {
 					released = d.ApplyDepartureRelease(memberID, op.MemberJoinedAt)
 					return nil
 				})
+				unlock()
 				if err != nil {
 					s.log.Error("reconcile: stale grant release failed", "member", memberID, "error", err.Error())
 					continue

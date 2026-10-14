@@ -57,10 +57,11 @@ func newToken() string {
 
 // Manager tracks active sessions.
 type Manager struct {
-	mu   sync.Mutex
-	byID map[string]*Session
-	ttl  time.Duration
-	now  func() time.Time
+	mu        sync.Mutex
+	byID      map[string]*Session
+	ttl       time.Duration
+	now       func() time.Time
+	lastSweep time.Time
 }
 
 // NewManager returns a Manager with the given session TTL.
@@ -69,14 +70,19 @@ func NewManager(ttl time.Duration) *Manager {
 }
 
 // Start creates a fresh session and returns it. It first sweeps expired
-// entries, so abandoned sessions (whose tokens are never presented again)
-// are reclaimed and memory stays bounded by one TTL window of traffic.
+// entries (throttled to at most once per tenth of the TTL, so per-request
+// cost is O(1) amortized), so abandoned sessions — whose tokens are never
+// presented again — are reclaimed and memory stays bounded by one TTL
+// window of traffic.
 func (m *Manager) Start() *Session {
 	now := m.now()
 	m.mu.Lock()
-	for k, s := range m.byID {
-		if now.After(s.ExpiresAt) {
-			delete(m.byID, k)
+	if now.Sub(m.lastSweep) >= m.ttl/10 {
+		m.lastSweep = now
+		for k, s := range m.byID {
+			if now.After(s.ExpiresAt) {
+				delete(m.byID, k)
+			}
 		}
 	}
 	s := &Session{
