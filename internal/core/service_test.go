@@ -25,15 +25,19 @@ type fakeDiscord struct {
 	failDel    map[string]error
 	blockAdd   chan struct{}            // if non-nil, AddRole blocks until closed
 	blockAddOn map[string]chan struct{} // "user:role" -> blocks until closed
+	// blockAddEntered receives a signal when AddRole reaches the matching
+	// blockAddOn entry (deterministic race arrangement in tests).
+	blockAddEntered map[string]chan struct{}
 }
 
 func newFakeDiscord() *fakeDiscord {
 	return &fakeDiscord{
-		members:    map[string]discordapi.MemberInfo{},
-		roles:      map[string]map[string]bool{},
-		failAdd:    map[string]error{},
-		failDel:    map[string]error{},
-		blockAddOn: map[string]chan struct{}{},
+		members:         map[string]discordapi.MemberInfo{},
+		roles:           map[string]map[string]bool{},
+		failAdd:         map[string]error{},
+		failDel:         map[string]error{},
+		blockAddOn:      map[string]chan struct{}{},
+		blockAddEntered: map[string]chan struct{}{},
 	}
 }
 
@@ -53,6 +57,14 @@ func (f *fakeDiscord) GetMember(_ context.Context, _, user string) (discordapi.M
 
 func (f *fakeDiscord) AddRole(_ context.Context, _, user, role string) error {
 	if ch := f.blockAddOn[user+":"+role]; ch != nil {
+		// Signal entry so tests can arrange their interleaving
+		// deterministically instead of sleeping.
+		if ec := f.blockAddEntered[user+":"+role]; ec != nil {
+			select {
+			case ec <- struct{}{}:
+			default:
+			}
+		}
 		<-ch
 	}
 	if f.blockAdd != nil {

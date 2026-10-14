@@ -23,16 +23,24 @@ func TestDepartureReleaseSerializedWithInFlightGrant(t *testing.T) {
 	h.disc.member("u1", j)
 	ctx := context.Background()
 
-	// Block the grant's first role add.
+	// Block the grant's first role add; the entered channel signals when
+	// the grant has actually reached the blocked call.
 	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
 	h.disc.blockAddOn["u1:111"] = block
+	h.disc.blockAddEntered["u1:111"] = entered
 
 	verifyDone := make(chan VerifyResult, 1)
 	go func() {
 		verifyDone <- h.svc.Verify(ctx, &VerifyInput{EmailVerified: true, Hd: "example.com", MemberID: "u1", JoinedAt: j, GoogleSub: "s1"})
 	}()
-	// Wait until the grant is inside AddRole(111), holding the member lock.
-	time.Sleep(100 * time.Millisecond)
+	// Deterministically wait until the grant is inside AddRole(111), holding
+	// the member lock.
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("grant never reached the blocked AddRole")
+	}
 
 	// The member left and rejoined; the sweep decides departure and blocks
 	// on the member lock at the release write.
@@ -45,7 +53,11 @@ func TestDepartureReleaseSerializedWithInFlightGrant(t *testing.T) {
 		defer close(sweepDone)
 		h.svc.Reconcile(ctx)
 	}()
-	time.Sleep(100 * time.Millisecond)
+	// No sleep needed here: whether the sweep's release write acquires the
+	// member lock before or after the grant completes, the outcome is
+	// identical — the release is serialized against the in-flight role work
+	// and can never commit between the grant's currency check and its
+	// Discord call. The teardown channels below synchronize both goroutines.
 
 	// Unblock the grant: it completes while holding the lock (its currency
 	// checks still pass — the release has not committed), then the release
