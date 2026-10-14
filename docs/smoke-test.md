@@ -57,9 +57,22 @@ otherwise identical to production except for the test identities.
 9. **CLI revoke.** Using the documented command:
 
    ```sh
-   kubectl -n <ns> create job revoke-smoke --image=<app-image> \
-     --overrides='{"spec":{"template":{"spec":{"serviceAccountName":"<app-sa>"}}}}' \
-     -- /discord-google-sso revoke <member-id> --state-secret <name> --guild <id>
+   kubectl -n <ns> apply -f - <<EOF
+   apiVersion: batch/v1
+   kind: Job
+   metadata:
+     name: revoke-smoke
+   spec:
+     backoffLimit: 0
+     template:
+       spec:
+         serviceAccountName: <app-sa>
+         restartPolicy: Never
+         containers:
+         - name: revoke
+           image: <app-image>
+           args: ["revoke", "<member-id>", "--state-secret", "<name>", "--guild", "<id>"]
+   EOF
    kubectl -n <ns> wait --for=condition=complete job/revoke-smoke --timeout=60s
    kubectl -n <ns> logs job/revoke-smoke
    ```

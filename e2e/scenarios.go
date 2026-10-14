@@ -62,7 +62,7 @@ func verifyUser(e *env, user string, gid googleID) string {
 
 func expectBody(body, want string) error {
 	if !strings.Contains(body, want) {
-		return fmt.Errorf("page does not contain %q: %s", want, clip(body, 200))
+		return fmt.Errorf("page does not contain %q: %q", want, clip(body, 300))
 	}
 	return nil
 }
@@ -170,11 +170,12 @@ func scCancelReplay(e *env) error {
 	if !strings.Contains(cbURL, "/callback/google") {
 		return fmt.Errorf("unexpected final URL: %s", cbURL)
 	}
+	// Replay: rejected.
 	body, err = e.browser.navigateTo(cbURL)
 	if err != nil {
 		return err
 	}
-	return expectBody(body, "already used or expired")
+	return expectBody(body, "has expired")
 }
 
 func scOneToOne(e *env) error {
@@ -193,9 +194,8 @@ func scOneToOne(e *env) error {
 }
 
 func scReassertion(e *env) error {
-	// Roles get lost (e.g. removed manually).
-	roles := []string{roleUnverif1, roleUnverif2, roleUnrelated, roleVerified2}
-	e.discAdmin("POST", "/_admin/member", map[string]any{"user_id": userMain, "guild_id": guildID, "roles": roles})
+	// Roles get lost (e.g. removed manually) — joined_at must not change.
+	e.setRoles(userMain, roleUnverif1, roleUnverif2, roleUnrelated, roleVerified2)
 	body := verifyUser(e, userMain, gIDWorkspace)
 	if err := expectBody(body, "Verification complete"); err != nil {
 		return err
@@ -289,8 +289,8 @@ func scRevokeDuringLogin(e *env) error {
 	// userFresh has an in-flight login paused at the Google consent page
 	// (Discord identity already established).
 	e.loginDiscord(userFresh)
-	e.loginGoogle(gIDWorkspace)
-	if _, err := e.browser.flowSteps(e, stepApprove, stepStopAtGoogle); err != nil {
+	e.loginGoogle(gIDFresh)
+	if _, err := e.browser.flowSteps(e, stepStopAtGoogle, stepApprove); err != nil {
 		return err
 	}
 	// A revocation for the never-linked target lands mid-login.
@@ -302,7 +302,7 @@ func scRevokeDuringLogin(e *env) error {
 		return fmt.Errorf("ack: %d %s", status, respBody)
 	}
 	// The login completes: it must not grant access.
-	body, err := e.browser.continueFromGoogleConsent()
+	body, err := e.browser.continueFromGoogleConsent(e)
 	if err != nil {
 		return err
 	}
@@ -323,15 +323,11 @@ func scCliRevoke(e *env) error {
 	if err := expectBody(verifyUser(e, userSecond, gIDOther), "Verification complete"); err != nil {
 		return err
 	}
-	// The operator guide's documented kubectl create job command.
-	sa := release + "-discord-google-sso"
-	e.kubectl("create", "job", "revoke-e2e-cli",
-		"--image="+appImage,
-		"--overrides="+fmt.Sprintf(`{"spec":{"template":{"spec":{"serviceAccountName":%q}}}}`, sa),
-		"--", "/discord-google-sso", "revoke", userSecond,
-		"--state-secret", stateSecret, "--guild", guildID)
-	e.kubectl("wait", "--for=condition=complete", "job/revoke-e2e-cli", "--timeout=90s")
-	logs := e.kubectl("logs", "job/revoke-e2e-cli")
+	// The operator guide's documented Job invocation.
+	logs, err := e.createRevokeJob("revoke-e2e-cli", userSecond)
+	if err != nil {
+		return err
+	}
 	if !strings.Contains(logs, "revocation committed") {
 		return fmt.Errorf("cli output: %s", clip(logs, 400))
 	}
@@ -345,7 +341,7 @@ func scCliRevoke(e *env) error {
 	}); err != nil {
 		return err
 	}
-	e.kubectl("delete", "job", "revoke-e2e-cli")
+	e.deleteJob("revoke-e2e-cli")
 	return nil
 }
 
@@ -366,7 +362,9 @@ func scLeaveRejoin(e *env) error {
 }
 
 func scMissedDeparture(e *env) error {
-	// userMain is verified; the service goes down while they leave.
+	// userMain is verified; the service goes down while they leave. Restore
+	// the deployment no matter where the scenario fails.
+	defer e.scaleApp(1)
 	e.scaleApp(0)
 	if err := pollAppScaled(e, 0); err != nil {
 		return err
@@ -390,7 +388,7 @@ func pollAppScaled(e *env, replicas int) error {
 	deadline := time.Now().Add(60 * time.Second)
 	name := release + "-discord-google-sso"
 	for time.Now().Before(deadline) {
-		out := e.kubectl("get", "deploy", name, "-o", "jsonpath={.status.replicas}")
+		out := strings.TrimSpace(e.kubectl("get", "deploy", name, "-o", "jsonpath={.spec.replicas}"))
 		if out == fmt.Sprint(replicas) {
 			return nil
 		}
@@ -426,27 +424,31 @@ func scCrashRestartGrant(e *env) error {
 	if op == nil {
 		return fmt.Errorf("no pending grant recorded")
 	}
-	// Crash and restart; resumption completes the grant.
+	// Crash and restart; resumption completes the grant. Poll both the
+	// roles and the cleared pending op, since the dying pod may have applied
+	// roles without completing the final state write.
 	e.discAdmin("POST", "/_admin/clear-failures", nil)
 	if err := e.restartApp(); err != nil {
 		return err
 	}
 	if err := pollState("grant resumption", 30*time.Second, func() bool {
-		return e.hasRole(userSecond, roleVerified1) && e.hasRole(userSecond, roleVerified2) && e.stateMember(userSecond) != nil
+		doc, err := e.readState()
+		if err != nil {
+			return false
+		}
+		return e.hasRole(userSecond, roleVerified1) && e.hasRole(userSecond, roleVerified2) &&
+			e.stateMember(userSecond) != nil && doc.Pending[userSecond] == nil
 	}); err != nil {
-		return err
-	}
-	doc, _ = e.readState()
-	if doc.Pending[userSecond] != nil {
-		return fmt.Errorf("resumed op not completed")
+		return fmt.Errorf("%w; roles: %v", err, e.memberRoles(userSecond))
 	}
 	return nil
 }
 
 func scDowntimeCliRevoke(e *env) error {
 	// A pending grant exists; during downtime the CLI revokes.
+	defer e.scaleApp(1)
 	e.discAdmin("POST", "/_admin/fail", map[string]any{"path": "/roles/", "status": 500, "count": 0})
-	body := verifyUser(e, userFresh, gIDWorkspace)
+	body := verifyUser(e, userFresh, gIDFresh)
 	if err := expectBody(body, "in progress"); err != nil {
 		return err
 	}
@@ -454,14 +456,12 @@ func scDowntimeCliRevoke(e *env) error {
 	if err := pollAppScaled(e, 0); err != nil {
 		return err
 	}
-	sa := release + "-discord-google-sso"
-	e.kubectl("create", "job", "revoke-e2e-down",
-		"--image="+appImage,
-		"--overrides="+fmt.Sprintf(`{"spec":{"template":{"spec":{"serviceAccountName":%q}}}}`, sa),
-		"--", "/discord-google-sso", "revoke", userFresh,
-		"--state-secret", stateSecret, "--guild", guildID)
-	e.kubectl("wait", "--for=condition=complete", "job/revoke-e2e-down", "--timeout=90s")
-	e.kubectl("delete", "job", "revoke-e2e-down")
+	if logs, err := e.createRevokeJob("revoke-e2e-down", userFresh); err != nil {
+		return err
+	} else if !strings.Contains(logs, "revocation committed") {
+		return fmt.Errorf("downtime cli output: %s", clip(logs, 300))
+	}
+	e.deleteJob("revoke-e2e-down")
 	e.discAdmin("POST", "/_admin/clear-failures", nil)
 	e.scaleApp(1)
 	if err := e.waitReady(); err != nil {
@@ -482,7 +482,7 @@ func scRevokeSupersededByReverify(e *env) error {
 	// userMain is verified. A revocation's restoration re-adds the first
 	// unverified role but fails on the second.
 	e.discAdmin("POST", "/_admin/fail", map[string]any{
-		"path": "/roles/" + roleUnverif2, "status": 500, "count": 0,
+		"path": "/roles/" + roleUnverif2, "method": "PUT", "status": 500, "count": 0,
 	})
 	status, respBody, err := e.postInteraction(revokeCommand(userMain, userAdmin, []string{roleAdmin}))
 	if err != nil {
@@ -501,12 +501,14 @@ func scRevokeSupersededByReverify(e *env) error {
 	if op := doc.Pending[userMain]; op == nil || op.Kind != "revoke" || len(op.RestoredSoFar) != 1 {
 		return fmt.Errorf("partial revoke op wrong: %+v", doc.Pending[userMain])
 	}
-	// Re-verification supersedes the partial revocation: verified roles
-	// applied, restored unverified roles removed again.
-	e.discAdmin("POST", "/_admin/clear-failures", nil)
+	// Re-verification supersedes the partially-applied revocation while the
+	// failure is still injected (so the revoke op cannot complete via a
+	// reconcile tick first): verified roles applied, restored unverified
+	// roles removed again.
 	if err := expectBody(verifyUser(e, userMain, gIDWorkspace), "Verification complete"); err != nil {
 		return err
 	}
+	e.discAdmin("POST", "/_admin/clear-failures", nil)
 	if e.hasRole(userMain, roleUnverif1) || e.hasRole(userMain, roleUnverif2) {
 		return fmt.Errorf("restored unverified roles survived re-verification: %v", e.memberRoles(userMain))
 	}
@@ -522,6 +524,10 @@ func scRevokeSupersededByReverify(e *env) error {
 
 func scRepeatedRevocation(e *env) error {
 	// Restoration stalls; repeated revocations remain idempotent.
+	baseEpoch := func() uint64 {
+		doc, _ := e.readState()
+		return doc.Epochs[userMain]
+	}()
 	e.discAdmin("POST", "/_admin/fail", map[string]any{"path": "/roles/", "status": 500, "count": 0})
 	for range 2 {
 		status, respBody, err := e.postInteraction(revokeCommand(userMain, userAdmin, []string{roleAdmin}))
@@ -532,12 +538,16 @@ func scRepeatedRevocation(e *env) error {
 			return fmt.Errorf("ack: %d %s", status, respBody)
 		}
 	}
-	doc, _ := e.readState()
-	if doc.Epochs[userMain] != 2 {
-		return fmt.Errorf("epoch after two revocations: %d", doc.Epochs[userMain])
-	}
-	if op := doc.Pending[userMain]; op == nil || op.Kind != "revoke" {
-		return fmt.Errorf("no single outstanding revoke op: %+v", doc.Pending[userMain])
+	// The commits are asynchronous (after the ACK); poll for both epochs.
+	if err := pollState("two revocation commits", 30*time.Second, func() bool {
+		doc, err := e.readState()
+		if err != nil {
+			return false
+		}
+		return doc.Epochs[userMain] == baseEpoch+2 && doc.Pending[userMain] != nil && doc.Pending[userMain].Kind == "revoke"
+	}); err != nil {
+		doc, _ := e.readState()
+		return fmt.Errorf("epoch after two revocations: %d (base %d); pending %+v", doc.Epochs[userMain], baseEpoch, doc.Pending[userMain])
 	}
 	// Provider recovers; the restoration eventually applies.
 	e.discAdmin("POST", "/_admin/clear-failures", nil)
@@ -557,6 +567,7 @@ func scRepeatedRevocation(e *env) error {
 func scPendingGrantRejoined(e *env) error {
 	// A pending grant for a member who left and rejoined during downtime is
 	// discarded rather than resumed.
+	defer e.scaleApp(1)
 	e.discAdmin("POST", "/_admin/fail", map[string]any{"path": "/roles/", "status": 500, "count": 0})
 	body := verifyUser(e, userSecond, gIDOther)
 	if err := expectBody(body, "in progress"); err != nil {
@@ -593,7 +604,15 @@ func scPendingGrantRejoined(e *env) error {
 }
 
 func scPolicyChange(e *env) error {
-	// userMain is verified with example.com. The allowlist changes.
+	// userMain is verified with example.com (establish fresh in case prior
+	// scenarios disturbed the state).
+	if err := expectBody(verifyUser(e, userMain, gIDWorkspace), "Verification complete"); err != nil {
+		return err
+	}
+	// The allowlist changes.
+	// Restore the original allowlist even on failure, so later scenarios
+	// start from a sane configuration.
+	defer func() { _ = e.helmInstall(e.releaseDir, "example.com") }()
 	if err := e.helmInstall(e.releaseDir, `"evil.io"`); err != nil {
 		return err
 	}
@@ -612,12 +631,14 @@ func scPolicyChange(e *env) error {
 	if !e.hasRole(userMain, roleVerified1) {
 		return fmt.Errorf("failed re-attempt disturbed roles")
 	}
-	// Restore the original allowlist.
-	return e.helmInstall(e.releaseDir, "example.com")
+	return nil
 }
 
 func scHelmLifecycle(e *env) error {
-	// userMain is verified; an upgrade must preserve state.
+	// userMain is verified (establish fresh); an upgrade must preserve state.
+	if err := expectBody(verifyUser(e, userMain, gIDWorkspace), "Verification complete"); err != nil {
+		return err
+	}
 	if err := e.helmInstall(e.releaseDir, "example.com"); err != nil {
 		return err
 	}
@@ -657,23 +678,35 @@ func scHelmLifecycle(e *env) error {
 
 func scRbacProbe(e *env) error {
 	sa := "system:serviceaccount:" + ns + ":" + release + "-discord-google-sso"
+	// An unrelated secret must exist to probe against.
+	e.kubectl("create", "secret", "generic", "other-secret", "--from-literal=x=y")
+	canI := func(verb, resource string) (string, error) {
+		args := []string{"--kubeconfig", e.kubeconfig, "auth", "can-i", verb, resource, "-n", ns, "--as", sa}
+		out, err := runCmd(e.releaseDir, "kubectl", args...)
+		// can-i exits 1 when the answer is "no".
+		if err != nil && !strings.Contains(err.Error(), "exit status 1") {
+			return "", err
+		}
+		return strings.TrimSpace(out), nil
+	}
 	checks := []struct {
-		args []string
-		want string
+		verb, resource, want string
 	}{
-		{[]string{"get", "secret", stateSecret, "-n", ns, "--as", sa}, "yes"},
-		{[]string{"create", "secret", "-n", ns, "--as", sa}, "yes"},
-		{[]string{"get", "secret", "other-secret", "-n", ns, "--as", sa}, "no"},
-		{[]string{"delete", "secret", stateSecret, "-n", ns, "--as", sa}, "no"},
+		{"get", "secret/" + stateSecret, "yes"},
+		{"create", "secret", "yes"},
+		{"get", "secret/other-secret", "no"},
+		{"delete", "secret/" + stateSecret, "no"},
 	}
 	for _, c := range checks {
-		args := append([]string{"auth", "can-i"}, c.args...)
-		args = append([]string{"--kubeconfig", e.kubeconfig}, args...)
-		out := strings.TrimSpace(mustRun(e.releaseDir, "kubectl", args...))
+		out, err := canI(c.verb, c.resource)
+		if err != nil {
+			return err
+		}
 		if out != c.want {
-			return fmt.Errorf("kubectl auth can-i %v: got %q want %q", c.args, out, c.want)
+			return fmt.Errorf("can-i %s %s: got %q want %q", c.verb, c.resource, out, c.want)
 		}
 	}
+	e.kubectl("delete", "secret", "other-secret")
 	return nil
 }
 

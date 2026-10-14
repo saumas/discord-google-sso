@@ -171,6 +171,7 @@ func (s *Server) handleDiscordCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.SetMember(sess.DiscordState, memberID, doc.Epoch(memberID), info.JoinedAt)
+	s.log.Info("discord leg complete", "member", memberID, "epoch", doc.Epoch(memberID))
 
 	authURL, err := s.google.AuthorizeURL(r.Context(), sess.GoogleState, sess.Nonce)
 	if err != nil {

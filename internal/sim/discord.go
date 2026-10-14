@@ -20,7 +20,8 @@ import (
 
 // Failure is an injected failure for matching requests.
 type Failure struct {
-	Path    string `json:"path"` // matched as a substring of the request path
+	Path    string `json:"path"`   // matched as a substring of the request path
+	Method  string `json:"method"` // if set, only this HTTP method matches
 	Status  int    `json:"status"`
 	Count   int    `json:"count"` // 0 = unlimited
 	DelayMS int    `json:"delay_ms"`
@@ -82,12 +83,12 @@ func (f *failureEngine) clear() {
 
 // check reports (blocked, status). A blocked request should return the given
 // status after the configured delay.
-func (f *failureEngine) check(path string) (bool, int, time.Duration) {
+func (f *failureEngine) check(method, path string) (bool, int, time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.failures {
 		fa := &f.failures[i]
-		if fa.Path != "" && contains(path, fa.Path) {
+		if fa.Path != "" && contains(path, fa.Path) && (fa.Method == "" || fa.Method == method) {
 			if fa.Count > 0 {
 				fa.Count--
 			}
@@ -136,8 +137,8 @@ type DiscordSim struct {
 }
 
 type simMember struct {
-	JoinedAt time.Time
-	Roles    []string
+	JoinedAt time.Time `json:"joined_at"`
+	Roles    []string  `json:"roles"`
 }
 
 // NewDiscordSim constructs the simulator.
@@ -167,6 +168,7 @@ func (d *DiscordSim) Handler() http.Handler {
 	mux.HandleFunc("POST /_admin/login-as", d.adminLoginAs)
 	mux.HandleFunc("POST /_admin/member", d.adminMember)
 	mux.HandleFunc("POST /_admin/kick", d.adminKick)
+	mux.HandleFunc("POST /_admin/set-roles", d.adminSetRoles)
 	mux.HandleFunc("POST /_admin/fail", d.adminFail)
 	mux.HandleFunc("POST /_admin/clear-failures", func(w http.ResponseWriter, _ *http.Request) {
 		d.failures.clear()
@@ -177,7 +179,7 @@ func (d *DiscordSim) Handler() http.Handler {
 }
 
 func (d *DiscordSim) handleAuthorize(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.URL.Path); blocked {
+	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
@@ -226,7 +228,7 @@ func (d *DiscordSim) handleAuthorizeDecision(w http.ResponseWriter, r *http.Requ
 }
 
 func (d *DiscordSim) handleToken(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.URL.Path); blocked {
+	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
@@ -260,7 +262,7 @@ func (d *DiscordSim) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *DiscordSim) handleMe(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.URL.Path); blocked {
+	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
@@ -290,7 +292,7 @@ func (d *DiscordSim) guildMember(guildID, userID string) *simMember {
 }
 
 func (d *DiscordSim) handleGetMember(w http.ResponseWriter, r *http.Request) {
-	if blocked, status, delay := d.failures.check(r.URL.Path); blocked {
+	if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
@@ -318,7 +320,7 @@ func (d *DiscordSim) handleGetMember(w http.ResponseWriter, r *http.Request) {
 
 func (d *DiscordSim) handleRole(add bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if blocked, status, delay := d.failures.check(r.URL.Path); blocked {
+		if blocked, status, delay := d.failures.check(r.Method, r.URL.Path); blocked {
 			if delay > 0 {
 				time.Sleep(delay)
 			}
@@ -473,6 +475,29 @@ func (d *DiscordSim) adminKick(w http.ResponseWriter, r *http.Request) {
 	if g := d.members[req.GuildID]; g != nil {
 		delete(g, req.UserID)
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminSetRoles replaces a member's roles WITHOUT touching joined_at, so
+// tests can simulate manual role changes without a spurious rejoin.
+func (d *DiscordSim) adminSetRoles(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID  string   `json:"user_id"`
+		GuildID string   `json:"guild_id"`
+		Roles   []string `json:"roles"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m := d.guildMember(req.GuildID, req.UserID)
+	if m == nil {
+		http.Error(w, "unknown member", http.StatusNotFound)
+		return
+	}
+	m.Roles = append([]string(nil), req.Roles...)
 	w.WriteHeader(http.StatusNoContent)
 }
 

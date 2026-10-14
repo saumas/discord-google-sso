@@ -46,6 +46,7 @@ const (
 	release       = "dgs"
 	stateSecret   = "dgs-e2e-state"
 	credSecret    = "dgs-e2e-credentials"
+	imageRepo     = "localhost/discord-google-sso"
 	appImage      = "localhost/discord-google-sso:e2e"
 	nodePortApp   = 30000
 	nodePortDisc  = 30001
@@ -67,6 +68,7 @@ var (
 	gIDEvilDomain = googleID{Sub: "g-sub-3", Email: "eve@evil.io", Name: "Eve", Hd: "evil.io", EmailVerified: true}
 	gIDConsumer   = googleID{Sub: "g-sub-4", Email: "casual@gmail.com", Name: "Casual", EmailVerified: true}
 	gIDUnverified = googleID{Sub: "g-sub-5", Email: "nev@example.com", Name: "Nev", Hd: "example.com", EmailVerified: false}
+	gIDFresh      = googleID{Sub: "g-sub-6", Email: "frank@example.com", Name: "Frank", Hd: "example.com", EmailVerified: true}
 )
 
 // env is the shared E2E environment.
@@ -130,7 +132,12 @@ func setup(ctx context.Context, cluster string) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
-	repo := filepath.Dir(wd)
+	// The harness runs from the repository root (make e2e / go run ./e2e);
+	// when invoked from the e2e directory itself, walk one level up.
+	repo := wd
+	if filepath.Base(repo) == "e2e" {
+		repo = filepath.Dir(repo)
+	}
 
 	fmt.Println("[setup] building container image")
 	if out, err := runCmd(repo, "docker", "build", "-t", appImage, "."); err != nil {
@@ -247,7 +254,7 @@ func writeFile(name, content string) string {
 
 func (e *env) helmInstall(repo, domains string) error {
 	values := template.Must(template.New("v").Parse(`image:
-  repository: {{.Image}}
+  repository: {{.Repo}}
   tag: e2e
   pullPolicy: Never
 guildID: "{{.Guild}}"
@@ -261,7 +268,7 @@ google:
   baseURL: "{{.GoogURL}}"
 allowedDomains: [{{.Domains}}]
 addRoles: ["{{.R1}}", "{{.R2}}"]
-removeRoles: ["{{.RR}}"]
+removeRoles: ["{{.RR}}", "{{.U1}}", "{{.U2}}"]
 unverifiedRoles: ["{{.U1}}", "{{.U2}}"]
 adminRoleIDs: ["{{.RA}}"]
 adminUserIDs: ["{{.AdminUser}}"]
@@ -273,7 +280,7 @@ service:
   nodePort: {{.NodePort}}
 `))
 	data := map[string]any{
-		"Image": appImage, "Guild": guildID, "AppURL": e.appURL, "PubKey": e.pubHex,
+		"Image": appImage, "Repo": imageRepo, "Guild": guildID, "AppURL": e.appURL, "PubKey": e.pubHex,
 		"DiscURL": e.discURL, "GoogURL": e.googURL, "Domains": domains,
 		"R1": roleVerified1, "R2": roleVerified2, "RR": roleRemoved,
 		"U1": roleUnverif1, "U2": roleUnverif2, "RA": roleAdmin, "AdminUser": userAdmin,
@@ -435,6 +442,12 @@ func (e *env) hasRole(user, role string) bool {
 	return false
 }
 
+func (e *env) setRoles(user string, roles ...string) {
+	e.discAdmin("POST", "/_admin/set-roles", map[string]any{
+		"user_id": user, "guild_id": guildID, "roles": roles,
+	})
+}
+
 func (e *env) loginDiscord(user string) {
 	e.discAdmin("POST", "/_admin/login-as", map[string]string{"user_id": user})
 }
@@ -461,9 +474,43 @@ func (e *env) appLogs() string {
 	return e.kubectl("logs", "deploy/"+release+"-discord-google-sso", "--tail=100000")
 }
 
-// restartApp deletes the Deployment pod and waits for readiness.
+// createRevokeJob runs the operator-guide-documented CLI revoke Job and
+// waits for completion, returning its logs.
+func (e *env) createRevokeJob(name, memberID string) (string, error) {
+	sa := release + "-discord-google-sso"
+	manifest := fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: %s
+      restartPolicy: Never
+      containers:
+      - name: revoke
+        image: %s
+        args: ["revoke", "%s", "--state-secret", "%s", "--guild", "%s"]
+`, name, ns, sa, appImage, memberID, stateSecret, guildID)
+	e.applyManifest(manifest)
+	args := []string{"--kubeconfig", e.kubeconfig, "-n", ns, "wait", "--for=condition=complete", "job/" + name, "--timeout=90s"}
+	if _, err := runCmd(e.releaseDir, "kubectl", args...); err != nil {
+		return "", fmt.Errorf("revoke job %s: %w", name, err)
+	}
+	return e.kubectl("logs", "job/"+name), nil
+}
+
+func (e *env) deleteJob(name string) { e.kubectl("delete", "job", name, "--wait=false") }
 func (e *env) restartApp() error {
 	e.kubectl("delete", "pod", "-l", "app.kubernetes.io/instance="+release+",app.kubernetes.io/name=discord-google-sso", "--wait=false")
+	// Wait for the rollout to settle: the replacement pod running and ready
+	// (the old pod may keep serving briefly during graceful shutdown).
+	if _, err := runCmd(e.releaseDir, "kubectl", "--kubeconfig", e.kubeconfig, "-n", ns,
+		"rollout", "status", "deploy/"+release+"-discord-google-sso", "--timeout=120s"); err != nil {
+		return err
+	}
 	return e.waitReady()
 }
 

@@ -167,23 +167,37 @@ is delivered on the interaction channel when the role work finishes.
 
 The CLI runs as a Job using the application's ServiceAccount, so it shares
 the chart's RBAC and works even while the Deployment is down; role
-restoration is applied by the service's reconciler once it runs again:
+restoration is applied by the service's reconciler once it runs again.
+Create the Job from a small manifest (recent kubectl versions do not support
+`--overrides` on `create job`, so the manifest form is the reliable way to
+set the ServiceAccount):
 
 ```sh
-kubectl -n discord-sso create job revoke-<name> \
-  --image=<app-image> \
-  --overrides='{"spec":{"template":{"spec":{"serviceAccountName":"<app-sa>"}}}}' \
-  -- /discord-google-sso revoke <member-id> --state-secret <name> --guild <id>
+kubectl -n discord-sso apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: revoke-<name>
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: <app-sa>   # the release's ServiceAccount
+      restartPolicy: Never
+      containers:
+      - name: revoke
+        image: <app-image>
+        args: ["revoke", "<member-id>", "--state-secret", "<name>", "--guild", "<id>"]
+EOF
+kubectl -n discord-sso wait --for=condition=complete job/revoke-<name> --timeout=60s
+kubectl -n discord-sso logs job/revoke-<name>
 ```
 
 Notes:
 
-- `--overrides` is what makes the Job's pod run as the application's
+- The manifest form is what makes the Job's pod run as the application's
   ServiceAccount (`kubectl --as` would only impersonate the request that
   creates the Job, not the pod).
-- Everything after `--` becomes the container command, so the binary path
-  `/discord-google-sso` must be spelled out (the container entrypoint is
-  replaced by `kubectl create job`).
 - Pass the release's actual `stateSecretName` and guild ID (sourced from the
   release values) — the Job pod inherits nothing from the Deployment's
   environment.

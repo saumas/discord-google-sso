@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "pipeline_id": "2026-10-14-115655",
+  "spec_path": "/Users/saulius/.discord-google-sso/first/docs/specs/implement-users-saulius-projects-saumas-discord-google-sso-d.md",
+  "phase": null,
+  "worktree_path": "/Users/saulius/.~/Projects/saumas/discord-google-sso/discord-google-sso-mvp-go-service",
+  "backend_id": "kimchi",
+  "model": "kimchi-dev/glm-5.3",
+  "main_session_id": "01a13a45-e488-776b-b151-09918f7068d8",
+  "current_step": "implement",
+  "dispatched_step": "implement",
+  "uncertain_step": "",
+  "completed_steps": [],
+  "review_file_paths": [],
+  "review_iteration": 0,
+  "review_checkpoint": {},
+  "stuck_retries": 0,
+  "started_at": "2026-10-14T11:56:55.917316+00:00",
+  "updated_at": "2026-10-14T11:57:01.545254+00:00"
+}

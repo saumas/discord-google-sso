@@ -291,22 +291,27 @@ func (c *Client) request(ctx context.Context, method, path, op, auth, contentTyp
 		}
 		status, respBody, err := c.once(ctx, method, path, auth, contentType, body)
 		if err == nil {
-			if status != http.StatusTooManyRequests {
+			if status != http.StatusTooManyRequests && status/100 != 5 {
 				return status, respBody, nil
 			}
-			// Rate limited: honor retry_after from the response body.
-			retryAfter := parseRetryAfter(respBody)
-			c.log.Warn("discord rate limited", "op", op, "attempt", attempt+1, "retry_after_ms", retryAfter.Milliseconds())
-			lastErr = &APIError{Op: op, Status: status, Body: "rate limited", Permanent: false}
-			select {
-			case <-ctx.Done():
-				return 0, nil, ctx.Err()
-			case <-time.After(retryAfter):
+			// 429 honors retry_after; 5xx backs off and retries.
+			if status == http.StatusTooManyRequests {
+				retryAfter := parseRetryAfter(respBody)
+				c.log.Warn("discord rate limited", "op", op, "attempt", attempt+1, "retry_after_ms", retryAfter.Milliseconds())
+				lastErr = &APIError{Op: op, Status: status, Body: "rate limited", Permanent: false}
+				select {
+				case <-ctx.Done():
+					return 0, nil, ctx.Err()
+				case <-time.After(retryAfter):
+				}
+				continue
 			}
+			lastErr = &APIError{Op: op, Status: status, Body: bodySnippet(respBody), Permanent: false}
+			c.log.Warn("discord request failed", "op", op, "attempt", attempt+1, "status", status)
 			continue
 		}
 		lastErr = err
-		// Network errors and 5xx are transient: retry.
+		// Network errors are transient: retry.
 		c.log.Warn("discord request failed", "op", op, "attempt", attempt+1, "error", err.Error())
 	}
 	return 0, nil, lastErr
