@@ -1,0 +1,5 @@
+# Agent/harness working state
+.agent-workflows/
+
+# Build output
+bin/
