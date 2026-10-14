@@ -1,0 +1,100 @@
+# Default values for discord-google-sso.
+
+image:
+  repository: ghcr.io/saumas/discord-google-sso
+  tag: "" # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The Discord guild (server) this release verifies members for. One server
+# per release.
+guildID: ""
+
+# Public base URL of this service, e.g. https://sso.example.com. The OAuth
+# callback URIs are derived from it unless overridden below.
+publicBaseURL: ""
+
+discord:
+  # Override the Discord API base URL (E2E simulators only; leave default in
+  # production).
+  baseURL: "" # -> https://discord.com
+  clientID: ""
+  # OAuth client secret and bot token come from the credentials Secret.
+  callbackURL: "" # -> <publicBaseURL>/callback/discord
+  publicKey: "" # hex-encoded Ed25519 application public key
+
+google:
+  # Override the Google OIDC base URL (E2E simulators only; leave default in
+  # production).
+  baseURL: "" # -> https://accounts.google.com
+  clientID: ""
+  callbackURL: "" # -> <publicBaseURL>/callback/google
+
+# Name of the (pre-created) Secret holding provider credentials:
+#   discord-client-secret, discord-bot-token, google-client-secret
+credentialsSecret: discord-google-sso-credentials
+
+# Allowed Google Workspace domains (the signed hd claim must match one).
+allowedDomains: []
+
+# Role policy: roles added / removed on verification, and the configured
+# initial role set for unverified members. A granted role must not appear
+# in either of the other two sets.
+addRoles: []
+removeRoles: []
+unverifiedRoles: []
+
+# /revoke authorization: callers holding one of these Discord role IDs or
+# matching one of these user IDs.
+adminRoleIDs: []
+adminUserIDs: []
+
+# Name of the app-owned state Secret. Created by the application; never
+# templated or owned by this chart.
+stateSecretName: discord-google-sso-state
+
+reconcileInterval: 5m
+sessionTTL: 10m
+
+service:
+  type: ClusterIP
+  port: 80
+  # nodePort: 30080 # when type: NodePort
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: sso.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

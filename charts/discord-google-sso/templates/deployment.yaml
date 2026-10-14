@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "discord-google-sso.fullname" . }}
+  labels:
+    {{- include "discord-google-sso.labels" . | nindent 4 }}
+spec:
+  # Exactly one replica: coordinated multi-replica operation is deferred, and
+  # a rolling upgrade would briefly run two pods, breaking the single-process
+  # role-mutation serialization the correctness argument relies on.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "discord-google-sso.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "discord-google-sso.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "discord-google-sso.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            - name: DGS_GUILD_ID
+              value: {{ .Values.guildID | quote }}
+            - name: DGS_PUBLIC_BASE_URL
+              value: {{ .Values.publicBaseURL | quote }}
+            - name: DGS_LISTEN_ADDR
+              value: "0.0.0.0:8080"
+            - name: DGS_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DGS_DISCORD_BASE_URL
+              value: {{ include "discord-google-sso.discordBaseURL" . | quote }}
+            - name: DGS_DISCORD_CLIENT_ID
+              value: {{ .Values.discord.clientID | quote }}
+            - name: DGS_DISCORD_CALLBACK_URL
+              value: {{ include "discord-google-sso.discordCallbackURL" . | quote }}
+            - name: DGS_DISCORD_PUBLIC_KEY
+              value: {{ .Values.discord.publicKey | quote }}
+            - name: DGS_DISCORD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentialsSecret }}
+                  key: discord-client-secret
+            - name: DGS_DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentialsSecret }}
+                  key: discord-bot-token
+            - name: DGS_GOOGLE_BASE_URL
+              value: {{ include "discord-google-sso.googleBaseURL" . | quote }}
+            - name: DGS_GOOGLE_CLIENT_ID
+              value: {{ .Values.google.clientID | quote }}
+            - name: DGS_GOOGLE_CALLBACK_URL
+              value: {{ include "discord-google-sso.googleCallbackURL" . | quote }}
+            - name: DGS_GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentialsSecret }}
+                  key: google-client-secret
+            - name: DGS_ALLOWED_DOMAINS
+              value: {{ include "discord-google-sso.csv" .Values.allowedDomains | quote }}
+            - name: DGS_ADD_ROLES
+              value: {{ include "discord-google-sso.csv" .Values.addRoles | quote }}
+            - name: DGS_REMOVE_ROLES
+              value: {{ include "discord-google-sso.csv" .Values.removeRoles | quote }}
+            - name: DGS_UNVERIFIED_ROLES
+              value: {{ include "discord-google-sso.csv" .Values.unverifiedRoles | quote }}
+            - name: DGS_ADMIN_ROLE_IDS
+              value: {{ include "discord-google-sso.csv" .Values.adminRoleIDs | quote }}
+            - name: DGS_ADMIN_USER_IDS
+              value: {{ include "discord-google-sso.csv" .Values.adminUserIDs | quote }}
+            - name: DGS_STATE_SECRET_NAME
+              value: {{ .Values.stateSecretName | quote }}
+            - name: DGS_RECONCILE_INTERVAL
+              value: {{ .Values.reconcileInterval | quote }}
+            - name: DGS_SESSION_TTL
+              value: {{ .Values.sessionTTL | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
