@@ -1,18 +1,20 @@
 // Command discord-google-sso runs the self-hosted Discord ↔ Google Workspace
 // SSO verification service. Subcommands: `serve` (or no arguments) runs the
 // HTTP server, `revoke` is the operator CLI, and `sim-discord`/`sim-google`
-// are the E2E provider simulators used by the Kind test suite. Any other
-// first argument is a configuration error and exits with usage.
+// are the E2E provider simulators used by the Kind test suite. Commands are
+// dispatched with spf13/cobra; usage failures exit non-zero with cobra's
+// error text.
 package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/saumas/discord-google-sso/internal/cli"
 	"github.com/saumas/discord-google-sso/internal/config"
@@ -27,35 +29,28 @@ import (
 	"github.com/saumas/discord-google-sso/internal/state"
 )
 
-const usage = `usage: discord-google-sso <command> [args]
-
-commands:
-  serve                run the verification HTTP server (default when no
-                       arguments are given)
-  revoke <member-id>   operator CLI: commit a revocation
-        --state-secret <name> --guild <id> [--namespace <ns>]
-  sim-discord          run the Discord provider simulator (E2E only)
-  sim-google           run the Google OIDC provider simulator (E2E only)`
-
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "serve":
-			runServer()
-		case "revoke":
-			os.Exit(cli.Revoke(os.Args[2:]))
-		case "sim-discord":
-			sim.RunDiscord(os.Args[2:])
-		case "sim-google":
-			sim.RunGoogle(os.Args[2:])
-		default:
-			fmt.Fprintln(os.Stderr, "unknown command:", os.Args[1])
-			fmt.Fprintln(os.Stderr, usage)
-			os.Exit(2)
-		}
-		return
+	if err := newRootCommand(runServer).Execute(); err != nil {
+		os.Exit(1)
 	}
-	runServer()
+}
+
+// newRootCommand builds the command tree: the root's default action runs the
+// server (bare invocation and `serve` share one code path via serveFn),
+// alongside the operator CLI and the two E2E provider simulators.
+func newRootCommand(serveFn func()) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "discord-google-sso",
+		Short: "self-hosted Discord ↔ Google Workspace SSO verification service",
+		Run:   func(cmd *cobra.Command, args []string) { serveFn() },
+	}
+	serve := &cobra.Command{
+		Use:   "serve",
+		Short: "run the verification HTTP server (default when no arguments are given)",
+		Run:   func(cmd *cobra.Command, args []string) { serveFn() },
+	}
+	root.AddCommand(serve, cli.NewRevokeCommand(), sim.NewDiscordCommand(), sim.NewGoogleCommand())
+	return root
 }
 
 func runServer() {

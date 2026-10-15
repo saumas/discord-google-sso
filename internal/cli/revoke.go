@@ -11,68 +11,82 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/saumas/discord-google-sso/internal/core"
 	"github.com/saumas/discord-google-sso/internal/kube"
 	"github.com/saumas/discord-google-sso/internal/state"
 )
 
-// usage prints the invocation help.
-const usage = "usage: discord-google-sso revoke <member-id> --state-secret <name> --guild <id> [--namespace <ns>]"
-
-// parseArgs accepts flags and the positional member ID in any order (the
-// Go flag package would require flags before positionals, which is a trap
-// for copy-pasted invocations).
-func parseArgs(args []string) (memberID, stateSecret, guild, namespace string, err error) {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--state-secret", a == "--guild", a == "--namespace":
-			if i+1 >= len(args) {
-				return "", "", "", "", fmt.Errorf("%s requires a value\n%s", a, usage)
-			}
-			switch a {
-			case "--state-secret":
-				stateSecret = args[i+1]
-			case "--guild":
-				guild = args[i+1]
-			case "--namespace":
-				namespace = args[i+1]
-			}
-			i++
-		case strings.HasPrefix(a, "--"):
-			return "", "", "", "", fmt.Errorf("unknown flag %s\n%s", a, usage)
-		default:
-			if memberID != "" {
-				return "", "", "", "", fmt.Errorf("multiple member IDs given\n%s", usage)
-			}
-			memberID = a
-		}
-	}
-	if memberID == "" || stateSecret == "" || guild == "" {
-		return "", "", "", "", fmt.Errorf("%s", usage)
-	}
-	return memberID, stateSecret, guild, namespace, nil
-}
-
-// Revoke runs the `revoke` subcommand.
-//
-// Usage:
+// NewRevokeCommand constructs the `revoke` subcommand:
 //
 //	discord-google-sso revoke <member-id> --state-secret <name> --guild <id> [--namespace <ns>]
-func Revoke(args []string) int {
-	memberID, stateSecret, guild, namespace, err := parseArgs(args)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		return 2
+//
+// pflag's interspersed parsing lets flags and the positional member ID
+// appear in any order. Usage errors (missing or empty member ID, missing or
+// empty required flags, unknown flag) surface as cobra errors with usage
+// text; runtime failures print verbatim to stderr. Both exit 1 at the
+// process boundary in main.
+func NewRevokeCommand() *cobra.Command {
+	var stateSecret, guild, namespace string
+	cmd := &cobra.Command{
+		Use:   "revoke <member-id>",
+		Short: "operator CLI: commit a revocation",
+		Args:  revokeArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Required-flag validation only checks that a flag was set,
+			// so an explicitly empty value still reaches this point;
+			// reject it here, before any cluster contact.
+			if stateSecret == "" {
+				return fmt.Errorf("--state-secret must not be empty")
+			}
+			if guild == "" {
+				return fmt.Errorf("--guild must not be empty")
+			}
+			// Failures past this point are runtime failures, not usage
+			// errors: keep the historical wording verbatim (e.g.
+			// "state load: ...") and let main() decide the exit code.
+			cmd.SilenceUsage = true
+			cmd.SilenceErrors = true
+			if err := runRevoke(args[0], stateSecret, guild, namespace); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return err
+			}
+			return nil
+		},
 	}
+	cmd.Flags().StringVar(&stateSecret, "state-secret", "", "name of the state secret")
+	cmd.Flags().StringVar(&guild, "guild", "", "Discord guild (server) ID")
+	cmd.Flags().StringVar(&namespace, "namespace", "", "namespace of the state secret (default: the service account's namespace)")
+	// MarkFlagRequired fails only on an unregistered flag name; the flags
+	// above are registered with these same static names.
+	_ = cmd.MarkFlagRequired("state-secret")
+	_ = cmd.MarkFlagRequired("guild")
+	return cmd
+}
 
+// revokeArgs enforces exactly one positional member ID and rejects an
+// explicitly empty one: the commit path keys revocations by member ID, and
+// "" would commit a garbage-keyed epoch and report success.
+func revokeArgs(cmd *cobra.Command, args []string) error {
+	if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+		return err
+	}
+	if args[0] == "" {
+		return fmt.Errorf("member ID must not be empty")
+	}
+	return nil
+}
+
+// runRevoke runs the revocation commit. Runtime failures (Kubernetes
+// client, state load, commit) are returned as errors; the command prints
+// them verbatim to stderr and the process boundary turns them into exit 1.
+func runRevoke(memberID, stateSecret, guild, namespace string) error {
 	client, ns, err := kube.Client()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "kubernetes client: %v\n", err)
-		return 1
+		return fmt.Errorf("kubernetes client: %v", err)
 	}
 	if namespace != "" {
 		ns = namespace
@@ -83,16 +97,16 @@ func Revoke(args []string) int {
 	defer cancel()
 
 	// Load first so corrupt state or a foreign guild fails with a clear
-	// error rather than resetting anything.
+	// error rather than resetting anything. An empty guild ID must never
+	// reach this point: on a cache miss, Load persists a document owned by
+	// the (garbage) guild before validating it.
 	if _, err := store.Load(ctx, guild); err != nil {
-		fmt.Fprintf(os.Stderr, "state load: %v\n", err)
-		return 1
+		return fmt.Errorf("state load: %v", err)
 	}
 
 	res, err := core.RevokeCommitOnly(ctx, store, guild, memberID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
-		return 1
+		return fmt.Errorf("revoke: %v", err)
 	}
 	fmt.Printf("revocation committed for member %s (epoch %d)\n", memberID, res.Epoch)
 	if res.CreatedRestoreOp {
@@ -100,5 +114,5 @@ func Revoke(args []string) int {
 	} else {
 		fmt.Println("no role restoration needed (no verified link or revocation was outstanding)")
 	}
-	return 0
+	return nil
 }
