@@ -1,0 +1,9 @@
+apiVersion: v2
+name: discord-google-sso
+description: >
+  Self-hosted Discord ↔ Google Workspace SSO verification service: guides
+  members through Discord OAuth and Google OIDC, enforces a Workspace domain
+  allowlist, links identities 1:1, and applies role grants and revocations.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
