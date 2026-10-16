@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep the SHA-pinned actions in .github/workflows/ci.yml current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Conventional-commits prefix so Dependabot's own PRs pass
+    # check-pr-title and the local hook ("build" is in the shared
+    # allowlist); scripts/test-hooks.sh asserts this stays true.
+    commit-message:
+      prefix: "build"
+      include: "scope"
