@@ -1,0 +1,40 @@
+#!/bin/sh
+# Commit-msg hook: enforce Conventional Commits format on new commits.
+# Not active in a fresh clone; opt in once with `make hooks`.
+
+set -u
+
+msg_file=$1
+first_line=$(head -n 1 "$msg_file")
+
+# Skip git-generated messages (merges, interactive rebases). git revert
+# subjects are always quoted (Revert "..."), matching the CI title
+# check; unquoted hand-written "Revert " subjects are validated.
+case "$first_line" in
+  "Merge "*|"Revert \""*|"fixup! "*|"squash! "*)
+    exit 0
+    ;;
+esac
+
+# Grammar shared with the CI PR-title check (.github/workflows/ci.yml);
+# scripts/test-hooks.sh asserts parity between the two allowlists.
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]*\))?(!)?: .+'
+
+if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
+  {
+    printf 'Invalid commit message subject:\n\n  %s\n\n' "$first_line"
+    cat <<'EOF'
+Expected Conventional Commits format:
+
+  <type>(<optional scope>)?!: <description>
+
+with a lowercase type from: feat, fix, docs, style, refactor, perf, test,
+build, ci, chore, revert.
+
+Examples:
+  feat: add token refresh loop
+  fix(auth): redirect after login
+EOF
+  } >&2
+  exit 1
+fi

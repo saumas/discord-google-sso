@@ -39,5 +39,47 @@ installs the chart with Go-simulated Discord/Google providers, and runs the
 full scenario matrix — it needs no real Google/Discord accounts or cloud
 credentials, only Docker, kind, helm, kubectl, and Google Chrome.
 
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and
+every push to `discord-google-sso-mvp-go-service`:
+
+- **build** — `make build` and `make test` (the unit suite; no cluster
+  needed). Runs on every PR event; superseded runs are cancelled via a
+  concurrency group, so a retitle re-runs the build instead of leaving
+  the head commit without a fresh build result.
+- **check-pr-title** — requires the PR title to follow
+  [Conventional Commits](https://www.conventionalcommits.org/):
+  `type(scope)!: description` with a lowercase type from feat, fix, docs,
+  style, refactor, perf, test, build, ci, chore, revert. The repo uses
+  squash merges, so the PR title becomes the permanent commit message.
+  Git-generated titles (`Revert "…"`, `Merge …`) are exempt, matching the
+  local hook. Pull requests from forks are title-checked like any other:
+  the read-only `GITHUB_TOKEN` a fork PR receives is sufficient for this
+  read-only validation (the action's README claims forks error under
+  `pull_request`, but that passage is outdated — see
+  amannn/action-semantic-pull-request#219).
+
+Actions are pinned to release commit SHAs; Dependabot
+(`.github/dependabot.yml`) advances the pins weekly.
+
+To get the same commit-message check locally, activate the commit-msg
+hook for your checkout:
+
+```sh
+make hooks    # worktree-scoped core.hooksPath -> .githooks
+```
+
+Activation is per checkout, not per clone: `make hooks` enables git's
+per-worktree config layer (`extensions.worktreeConfig`, which itself is
+shared across a repository's worktrees) and writes a worktree-scoped
+`core.hooksPath`, so sibling worktrees of the same repository are not
+affected. It refuses to overwrite an existing `core.hooksPath`. After
+activation, `git commit` rejects subjects that don't match, e.g.
+`feat: add token refresh loop` or `fix(auth): redirect after login` pass,
+while `update` is rejected with the expected format shown. The hook's
+behavior and its parity with the CI allowlist are covered by
+`make test-hooks` (also run by `make test`).
+
 For deploying against real providers, follow the
 [operator guide](docs/operator-guide.md).
