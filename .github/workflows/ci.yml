@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [discord-google-sso-mvp-go-service]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+# Cancel superseded runs (rapid pushes or retitles) so obsolete builds
+# don't run to completion in parallel.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - run: make test
+
+  check-pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      # Git-generated titles (GitHub's revert button, merge commits) match
+      # prefixes the local hook skips as well; exempt them so both layers
+      # treat them alike. The hook additionally skips fixup!/squash!
+      # prefixes for interactive-rebase compatibility — those never occur
+      # as PR titles.
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        if: ${{ !startsWith(github.event.pull_request.title, 'Revert "') && !startsWith(github.event.pull_request.title, 'Merge ') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Strict lowercase allowlist; matching is case-sensitive.
+          # Keep in sync with .githooks/commit-msg; scripts/test-hooks.sh
+          # asserts parity (no comments inside the list — it is parsed).
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
