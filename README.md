@@ -42,7 +42,7 @@ credentials, only Docker, kind, helm, kubectl, and Google Chrome.
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and
-every push to `discord-google-sso-mvp-go-service`:
+every push to `main`:
 
 - **build** — `make build` and `make test` (the unit suite; no cluster
   needed). Runs on every PR event; superseded runs are cancelled via a
